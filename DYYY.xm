@@ -11404,13 +11404,18 @@ static Class tabBarButtonClass = nil;
                      (PlayVCClass2 && [vc isKindOfClass:PlayVCClass2]) ||
                      (PlayVCClass3 && [vc isKindOfClass:PlayVCClass3]));
 
+    // 毛玻璃：Merge 播放器（详情/位置/评论场景）同样需要保持原位，
+    // 否则评论区打开时视频随面板移动，透明毛玻璃效果失效。
     if (isPlayVC && enableBlur) {
         if (frame.origin.x != 0) {
             return;
         }
     }
 
-    if (isPlayVC && enableFS) {
+    // 首页全屏：仅限首页播放器，排除 Merge，避免查看定位等详情页视频被拉全屏。
+    BOOL isFeedPlayVC = ((PlayVCClass1 && [vc isKindOfClass:PlayVCClass1]) ||
+                         (PlayVCClass2 && [vc isKindOfClass:PlayVCClass2]));
+    if (isFeedPlayVC && enableFS) {
         if (frame.origin.x != 0 && frame.origin.y != 0) {
             %orig(frame);
             return;
@@ -11750,25 +11755,6 @@ static Class tabBarButtonClass = nil;
         return NO;
     }
     return %orig;
-}
-
-- (void)viewDidLayoutSubviews {
-    %orig;
-    if (DYYYGetBool(@"DYYYEnableFullScreen")) {
-        UIView *contentView = self.contentView;
-        if (contentView && contentView.superview) {
-            CGRect frame = contentView.frame;
-            CGFloat parentHeight = contentView.superview.frame.size.height;
-
-            if (frame.size.height == parentHeight - gCurrentTabBarHeight) {
-                frame.size.height = parentHeight;
-                contentView.frame = frame;
-            } else if (frame.size.height == parentHeight - (gCurrentTabBarHeight * 2)) {
-                frame.size.height = parentHeight - gCurrentTabBarHeight;
-                contentView.frame = frame;
-            }
-        }
-    }
 }
 
 - (void)setIsAutoPlay:(BOOL)arg0 {
