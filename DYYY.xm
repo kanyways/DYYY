@@ -11485,25 +11485,25 @@ static Class tabBarButtonClass = nil;
     Class DetailVCClass = NSClassFromString(@"AWEMixVideoPanelDetailTableViewController");
     Class PlayVCClass1 = NSClassFromString(@"AWEAwemePlayVideoViewController");
     Class PlayVCClass2 = NSClassFromString(@"AWEDPlayerFeedPlayerViewController");
-    Class PlayVCClass3 = NSClassFromString(@"AWEDPlayerViewController_Merge");
 
     BOOL isDetailVC = (DetailVCClass && [vc isKindOfClass:DetailVCClass]);
+    // 注意：这里刻意不含 Merge 播放器（AWEDPlayerViewController_Merge）。
+    // 评论区/详情场景的视频是 Merge 播放器，拦截它的 setFrame（x != 0 时
+    // 丢弃布局）会破坏视频正常显示，导致毛玻璃背后没有内容、看起来"完全
+    // 没模糊"。保持原位拦截只针对首页播放器，与正常版本（DYYY-bak）一致。
     BOOL isPlayVC = ((PlayVCClass1 && [vc isKindOfClass:PlayVCClass1]) ||
-                     (PlayVCClass2 && [vc isKindOfClass:PlayVCClass2]) ||
-                     (PlayVCClass3 && [vc isKindOfClass:PlayVCClass3]));
+                     (PlayVCClass2 && [vc isKindOfClass:PlayVCClass2]));
 
-    // 毛玻璃：Merge 播放器（详情/位置/评论场景）同样需要保持原位，
-    // 否则评论区打开时视频随面板移动，透明毛玻璃效果失效。
+    // 毛玻璃：首页播放器保持原位，避免评论区打开时视频随面板移动。
     if (isPlayVC && enableBlur) {
         if (frame.origin.x != 0) {
             return;
         }
     }
 
-    // 首页全屏：仅限首页播放器，排除 Merge，避免查看定位等详情页视频被拉全屏。
-    BOOL isFeedPlayVC = ((PlayVCClass1 && [vc isKindOfClass:PlayVCClass1]) ||
-                         (PlayVCClass2 && [vc isKindOfClass:PlayVCClass2]));
-    if (isFeedPlayVC && enableFS) {
+    // 全屏：同样仅限首页播放器（isPlayVC 不含 Merge），
+    // 查看定位等详情页视频不会被拉全屏。
+    if (isPlayVC && enableFS) {
         if (frame.origin.x != 0 && frame.origin.y != 0) {
             %orig(frame);
             return;
