@@ -761,8 +761,8 @@
                                                                NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
                                                                if (httpResponse.statusCode != 200) {
                                                                    NSError *httpError = [NSError errorWithDomain:@"com.dyyy.api"
-                                                                                                           code:httpResponse.statusCode
-                                                                                                       userInfo:@{NSLocalizedDescriptionKey : @"HTTP 请求失败"}];
+                                                                                                            code:httpResponse.statusCode
+                                                                                                        userInfo:@{NSLocalizedDescriptionKey : @"HTTP 请求失败"}];
                                                                    completionHandler(nil, httpError);
                                                                    return;
                                                                }

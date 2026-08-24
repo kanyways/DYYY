@@ -1,19 +1,46 @@
+//
+//  DYYYUtils.m - DYYY 插件的"工具箱"工具类
+//
+//  定位：本文件不包含任何界面，只提供被 DYYY.xm / DYYYManager.m 到处调用的
+//  能力函数：网络与缓存、图片/动图处理、UI 与视图树操作、文件管理、颜色方案、
+//  日志、线程安全与调试辅助。绝大多数方法是类方法(+)或全局 C 函数，
+//  因为 tweak 代码没有明确的"对象"边界，类方法/全局函数最方便从任意钩子里
+//  直接调用，无需先创建实例。
+//
+//  功能地图（按 #pragma mark 区块划分，Xcode 跳转栏可直接定位）：
+//  1. 模型过滤（Public Model Filtering Utilities）：判断抖音模型/原始数据是否广告，
+//     用于去广告功能（arrayByRemovingAdvertisements:）。
+//  2. UI 工具（Public UI Utilities）：当前窗口/顶层控制器、按类名找控件、毛玻璃、
+//     Toast、深浅色判断。
+//  3. 文件管理（Public File Management）：目录大小、清空目录、统一缓存目录。
+//  4. 媒体工具（Public Media Helper Methods）：识别文件格式（魔数）、动图时长、
+//     GIF 生成/保存相册、WebP/HEIC 转 GIF、视频合并音频。
+//  5. 颜色方案（Public Color Scheme Methods）：把 "#FF0000"、"rainbow"、
+//     "random" 等字符串解析成 UIColor / CALayer。
+//  6. 私有辅助（Private Helper Methods）：以上各区共用的内部函数。
+//  7. 版本比较（Version Utilities）、调试工具（Debug Utilities）。
+//  8. 外部 C 函数（External C Functions）：供 Logos 钩子等 C 风格代码直接调用。
+//
+//  阅读建议：新人先看"IP 属地"方法（processAndApplyIPLocationToLabel:）和
+//  颜色方案入口（colorFromSchemeHexString:），这两个方法浓缩了本文件大多数模式：
+//  运行时探测、两级缓存、回调回主队列、锁与原子操作。
+//
 #import "DYYYUtils.h"
 #import <AVFoundation/AVFoundation.h>
 #import <ImageIO/ImageIO.h>
 #import <MobileCoreServices/UTCoreTypes.h>
 #import <UIKit/UIKit.h>
 #import <math.h>
-#import <os/lock.h>
-#import <os/log.h>
-#import <stdatomic.h>
-#import <stdarg.h>
-#import <unistd.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <os/lock.h>
+#import <os/log.h>
+#import <stdarg.h>
+#import <stdatomic.h>
+#import <unistd.h>
 #import "AwemeHeaders.h"
-#import "DYYYToast.h"
 #import "DYYYConstants.h"
+#import "DYYYToast.h"
 
 @class YYImageDecoder;
 @class YYImageFrame;
@@ -29,18 +56,30 @@
 - (YYImageFrame *)frameAtIndex:(NSUInteger)index decodeForDisplay:(BOOL)decodeForDisplay;
 @end
 
+// 两个静态常量说明：
+// kLabelColorStateKey：作为"关联对象（associated object）"的键。objc_setAssociatedObject
+//   可以把自定义状态"挂"到任意对象（这里是 UILabel）上；键必须是一个稳定唯一的地址，
+//   所以用"它自己的地址"做键，保证全局不冲突。
+// kDYYYUtilsDefaultFrameDelay：动图单帧默认时长 0.1 秒（10 帧/秒），
+//   当某帧没有记录时长或时长非法时兜底使用。
 static const void *kLabelColorStateKey = &kLabelColorStateKey;
 static const NSTimeInterval kDYYYUtilsDefaultFrameDelay = 0.1f;
 
+// ==== 日志区块 ====
+// DYYYNSLog 是插件自己的日志函数：一条日志同时发给 os_log（macOS 的 Console.app
+// 或 Xcode 里可见）、stderr（越狱环境下 ssh 进设备即可看到），
+// 并异步追加写入临时目录下的 runtime.log。
+// 这里有两个常见的线程安全模式值得记住：
+// 1. dispatch_once：保证初始化代码在进程生命周期内只执行一次，且线程安全——
+//    多个线程同时第一次调用也不会重复执行，适合惰性创建单例/队列。
+// 2. 串行队列 + dispatch_async：写文件是磁盘 IO，不该阻塞调用线程（可能正跑在
+//    主线程上）；所有日志丢进同一个串行队列，写入互不交错、顺序不乱。
 static NSString *DYYYRuntimeLogFilePath(void) {
     static NSString *logPath = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
       NSString *logsDirectory = [NSTemporaryDirectory() stringByAppendingPathComponent:@"DYYYLogs"];
-      [[NSFileManager defaultManager] createDirectoryAtPath:logsDirectory
-                                withIntermediateDirectories:YES
-                                                 attributes:nil
-                                                      error:nil];
+      [[NSFileManager defaultManager] createDirectoryAtPath:logsDirectory withIntermediateDirectories:YES attributes:nil error:nil];
       logPath = [logsDirectory stringByAppendingPathComponent:@"runtime.log"];
     });
     return logPath;
@@ -107,6 +146,8 @@ void DYYYNSLog(NSString *format, ...) {
     });
 }
 
+// 动图帧时长归一化：某些帧的时长可能是 NaN、无穷大或小于 0.01 秒（非法值），
+// 直接写进 GIF 会让播放器行为异常（闪帧/卡死），这里统一兜底为默认 0.1 秒。
 static inline CGFloat DYYYUtilsNormalizedDelay(CGFloat delay) {
     if (!isfinite(delay) || delay < 0.01f) {
         return kDYYYUtilsDefaultFrameDelay;
@@ -151,6 +192,11 @@ static BOOL DYYYColorKeyIsDynamic(NSString *normalizedKey) {
     return [key isEqualToString:@"random"] || [key isEqualToString:@"random_gradient"] || [key isEqualToString:@"rainbow_rotating"];
 }
 
+// 通过 NSClassFromString(@"YYImageDecoder") 反射创建 YYImage 的解码器，而不是直接
+// #import <YYImage/YYImageDecoder.h>。原因：tweak 运行在宿主 App（抖音）进程里，
+// YYImage 库可能存在也可能不存在、版本还可能不同，直接链接/导入会导致启动崩溃。
+// 用"类名字符串 + respondsToSelector"探测：库在就用，不在就返回 nil 走兜底逻辑。
+// 这是 tweak 里最常见的"运行时软依赖"写法，本文件多处用到。
 static YYImageDecoder *DYYYUtilsCreateYYDecoderWithData(NSData *data, CGFloat scale) {
     if (!data || data.length == 0) {
         return nil;
@@ -189,6 +235,14 @@ static CGFloat DYYYUtilsTotalDurationFromYYDecoder(YYImageDecoder *decoder) {
     return totalDuration;
 }
 
+// ==== 二进制解析区块 ====
+// 下面几个函数直接解析 MP4/HEIF 容器的字节，目的是从动图/视频文件里读出时长。
+// 为什么手动解析而不是用现成 API？系统 API 不提供"读文件头时长"的便捷入口，
+// 而 tweak 也不想为了读个时长引入视频解析库。
+// 注意大小端：MP4/HEIF 的 box 头是网络字节序（大端），而 x86/ARM 内存里是小端，
+// 所以必须先手工把 4/8 个字节拼成整数（ReadUInt32/64BigEndian），否则数值颠倒。
+// MP4 结构 = 一层层 box（长度 + 类型 + 数据）；mvhd 子 box 记录 timescale 与
+// duration，时长 = duration / timescale。下面的函数就是在递归找 mvhd 这个 box。
 static uint32_t DYYYUtilsReadUInt32BigEndian(const uint8_t *bytes) {
     return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) | ((uint32_t)bytes[2] << 8) | (uint32_t)bytes[3];
 }
@@ -306,6 +360,11 @@ static NSURL *DYYYUtilsTemporaryGIFURLForSourceURL(NSURL *sourceURL) {
     return [NSURL fileURLWithPath:path];
 }
 
+// 用 Core Graphics 的 CGImageDestination 把解码出的每一帧写成 GIF 文件：
+// CGImageDestination 是 C 语言级别的"图像编码器"，可逐帧添加图片并携带帧参数
+// （这里设置了循环次数和每帧延迟），最后 CGImageDestinationFinalize 才真正落盘。
+// 注意 __bridge：Core Foundation 与 Foundation 对象互转需要桥接，__bridge 表示
+// "只转指针、不转移所有权"，配合后面的 CFRelease 手动释放 C 对象。
 static BOOL DYYYUtilsWriteGIFUsingYYDecoder(YYImageDecoder *decoder, NSURL *gifURL, NSTimeInterval fallbackTotalDuration) {
     if (!decoder || decoder.frameCount == 0) {
         return NO;
@@ -389,8 +448,16 @@ static BOOL DYYYUtilsWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
 
 static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
 
+// ==== 功能区块一：模型过滤（去广告的核心判断） ====
+// 抖音的列表数据模型（AWEAwemeModel 等）来自宿主 App 的私有类，本文件顶部只
+// import 了 AwemeHeaders.h（越狱社区对抖音私有头文件的逆向产物）。私有类在
+// 抖音升级后可能改名/删方法，所以这里大量使用 NSClassFromString /
+// respondsToSelector 探测，缺了也不崩，最多导致该功能不生效。
 #pragma mark - Public Model Filtering Utilities (公共模型过滤工具)
 
+// 安全版 KVC：valueForKey: 在键不存在时不是返回 nil，而是抛 NSException。
+// 在 tweak 场景（目标 App 结构随时会变）里取值必须先 @try/@catch 包住，
+// 否则一个异常就能让整个插件崩溃。
 + (id)dyyy_safeValueForKey:(NSString *)key fromObject:(id)object {
     if (!object || key.length == 0) {
         return nil;
@@ -409,10 +476,7 @@ static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
     }
     if ([object isKindOfClass:[NSString class]]) {
         NSString *value = [(NSString *)object stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        return value.length > 0 &&
-               ![value isEqualToString:@"{}"] &&
-               ![value isEqualToString:@"[]"] &&
-               ![value isEqualToString:@"null"];
+        return value.length > 0 && ![value isEqualToString:@"{}"] && ![value isEqualToString:@"[]"] && ![value isEqualToString:@"null"];
     }
     if ([object isKindOfClass:[NSData class]]) {
         return [(NSData *)object length] > 0;
@@ -426,6 +490,11 @@ static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
     return NO;
 }
 
+// 逐个探测抖音模型上可能存在的"广告判定"方法并调用。
+// 注意这里用 objc_msgSend 而不是 performSelector:——performSelector: 拿不到
+// BOOL 返回值（它只返回 id），所以手工声明函数指针类型 (BOOL(*)(id, SEL))，
+// 再以 C 函数方式直接给对象发消息。这是 tweak 调用私有方法并取标量返回值的
+// 常用手法，本文件多处可见。
 + (BOOL)isAdvertisementAwemeModel:(id)model {
     Class awemeModelClass = NSClassFromString(@"AWEAwemeModel");
     if (!model || !awemeModelClass || ![model isKindOfClass:awemeModelClass]) {
@@ -436,7 +505,7 @@ static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
     for (NSString *selectorName in @[ @"checkIsAd", @"isHardAdModel", @"isHardAd", @"isAds" ]) {
         SEL selector = NSSelectorFromString(selectorName);
         if ([model respondsToSelector:selector]) {
-            BOOL (*sendBool)(id, SEL) = (BOOL (*)(id, SEL))objc_msgSend;
+            BOOL (*sendBool)(id, SEL) = (BOOL(*)(id, SEL))objc_msgSend;
             if (sendBool(model, selector)) {
                 return YES;
             }
@@ -468,7 +537,7 @@ static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
         if (![model respondsToSelector:selector]) {
             continue;
         }
-        id (*sendObject)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+        id (*sendObject)(id, SEL) = (id(*)(id, SEL))objc_msgSend;
         if ([self isAdvertisementAwemeModel:sendObject(model, selector)]) {
             return YES;
         }
@@ -621,6 +690,15 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     [DYYYUtils applyColorSettingsToLabel:label colorHexString:colorHexString];
 }
 
+// ==== 关键方法：给作品标签打上"IP 属地" ====
+// 这是"内存缓存 -> 磁盘缓存 -> 网络请求 -> 回主线程刷新 UI"的完整示例，值得逐行读：
+// 1. objc_setAssociatedObject 把本次请求的城市码挂到 label 上；网络回调回来时用
+//    objc_getAssociatedObject 对比：如果用户已滚动到别的作品（城市码变了），就
+//    丢弃这次结果，避免旧数据覆盖新标签。这是无锁的"防竞态"写法。
+// 2. 缓存分两级：NSCache（进程内内存缓存，App 被杀即失）+ 沙盒 Caches 目录下的
+//    plist 文件（磁盘缓存，下次启动还在），命中就直接用，不发网络请求。
+// 3. 所有 UI 更新（改 label.text）都 dispatch_async 回主线程——UIKit 不是线程
+//    安全的，网络回调运行在后台线程，直接改 UI 会崩溃或闪烁。
 + (void)processAndApplyIPLocationToLabel:(UILabel *)label forModel:(AWEAwemeModel *)model withLabelColor:(NSString *)colorHexString {
     NSString *originalText = label.text ?: @"";
     NSString *cityCode = model.cityCode;
@@ -797,7 +875,7 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
 
     NSDictionary *status = error.userInfo[DYYYGeonamesStatusUserInfoKey];
     if ([status isKindOfClass:[NSDictionary class]]) {
-        NSString *statusJSON = DYYYJSONStringFromObject(@{ @"status" : status });
+        NSString *statusJSON = DYYYJSONStringFromObject(@{@"status" : status});
         if (statusJSON.length > 0) {
             return [NSString stringWithFormat:@"未知 %@", statusJSON];
         }
@@ -812,8 +890,18 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     return @"未知";
 }
 
+// ==== 功能区块二：UI 工具 ====
+// 插件经常要"在 App 界面上盖东西"或"找到某个控件"。下面这些方法负责：
+// 拿当前窗口/顶层控制器、按类名在视图树里找控件、加毛玻璃、递归清背景、
+// 弹 Toast、判断深浅色模式。调用宿主 App 内部类（如 DUXToast）时一律用
+// 运行时三步曲：NSClassFromString 找类 -> respondsToSelector 确认方法 ->
+// performSelector 调用，类不存在时静默跳过，不影响其他功能。
 #pragma mark - Public UI Utilities (公共 UI/窗口/控制器 工具)
 
+// 拿到"当前正在显示的窗口"。iOS 13 之后 App 可以多窗口（多 UIWindowScene 场景），
+// 老 API keyWindow 已废弃且可能返回 nil，所以要遍历 connectedScenes 找激活中的
+// 场景，再逐级回退（delegate.window -> windows.firstObject），保证各种状态下
+// 都有返回值——这是兼容老版本系统的"回退链"写法。
 + (UIWindow *)getActiveWindow {
     UIWindow *fallbackWindow = [UIApplication sharedApplication].keyWindow ?: [UIApplication sharedApplication].delegate.window ?: [UIApplication sharedApplication].windows.firstObject;
 
@@ -963,7 +1051,8 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     UIView *commonSuperview = views.firstObject;
     for (UIView *view in views) {
         commonSuperview = [self _nearestCommonSuperviewOfView:commonSuperview andView:view];
-        if (!commonSuperview) break;
+        if (!commonSuperview)
+            break;
     }
 
     return commonSuperview;
@@ -1061,7 +1150,7 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     Class themeManagerClass = NSClassFromString(@"AWEUIThemeManager");
     SEL isLightThemeSEL = NSSelectorFromString(@"isLightTheme");
     if (themeManagerClass && [themeManagerClass respondsToSelector:isLightThemeSEL]) {
-        return ((BOOL (*)(id, SEL))objc_msgSend)(themeManagerClass, isLightThemeSEL);
+        return ((BOOL(*)(id, SEL))objc_msgSend)(themeManagerClass, isLightThemeSEL);
     }
 
     id themeManager = nil;
@@ -1075,7 +1164,7 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
 
     if (themeManager) {
         if ([themeManager respondsToSelector:isLightThemeSEL]) {
-            return ((BOOL (*)(id, SEL))objc_msgSend)(themeManager, isLightThemeSEL);
+            return ((BOOL(*)(id, SEL))objc_msgSend)(themeManager, isLightThemeSEL);
         }
 
         @try {
@@ -1102,6 +1191,10 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     return NO;
 }
 
+// ==== 功能区块三：文件管理 ====
+// 缓存/临时文件都放在 NSTemporaryDirectory() 或 Caches 目录：这两个目录系统会
+// 定期清理、不算用户数据，适合放下载的临时资源，不会把用户存储空间撑爆，
+// 也不需要在卸载时自己操心清理。
 #pragma mark - Public File Management (公共文件管理)
 
 + (NSString *)formattedSize:(unsigned long long)size {
@@ -1225,8 +1318,15 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     return [[self cacheDirectory] stringByAppendingPathComponent:filename];
 }
 
+// ==== 功能区块四：媒体工具 ====
+// 和抖音的图片/视频打交道：识别文件真实格式、缩放图片、读动图时长、
+// 生成 GIF / 保存到相册、WebP/HEIC 转 GIF、视频合并音频。
 #pragma mark - Public Media Helper Methods (公共媒体工具方法)
 
+// 通过"魔数（magic bytes）"识别文件真实格式：每种格式开头几个字节是固定的
+// 特征值（GIF 的 "GIF8"、PNG 的 0x89PNG、JPEG 的 0xFFD8、WebP 的 RIFF....WEBP、
+// HEIC 的 ftyp 等）。之所以不信任文件扩展名——抖音下载的资源扩展名可能乱标，
+// 扩展名错了按错格式解析会直接失败，看字节最可靠。
 + (NSString *)detectFileFormat:(NSURL *)fileURL {
     NSData *fileData = [NSData dataWithContentsOfURL:fileURL options:NSDataReadingMappedIfSafe error:nil];
     if (!fileData || fileData.length < 12) {
@@ -1383,6 +1483,9 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     return nil;
 }
 
+// 读取动图总时长。难点：抖音不同版本/不同来源的动图，底层可能是 UIImage.images、
+// YYAnimatedImage 协议、YYImageDecoder 或普通 UIImage，没有统一 API。所以这里
+// 按优先级逐个探测，谁有数据用谁（多级兜底策略），最后再退回 KVC 取 duration。
 + (CGFloat)getDurationFromYYAnimatedImageView:(YYAnimatedImageView *)imageView {
     if (!imageView || !imageView.image) {
         return 0;
@@ -1417,7 +1520,7 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     SEL dataSEL = NSSelectorFromString(@"animatedImageData");
     NSData *animatedData = nil;
     if ([image respondsToSelector:dataSEL]) {
-        animatedData = ((NSData *(*)(id, SEL))objc_msgSend)(image, dataSEL);
+        animatedData = ((NSData * (*)(id, SEL)) objc_msgSend)(image, dataSEL);
     }
     if (animatedData.length > 0) {
         CGFloat scale = image.scale > 0 ? image.scale : 1.0f;
@@ -1439,10 +1542,7 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     return [durationValue respondsToSelector:@selector(floatValue)] ? [durationValue floatValue] : 0;
 }
 
-+ (BOOL)framesFromAnimatedData:(NSData *)data
-                         scale:(CGFloat)scale
-                        images:(NSArray<UIImage *> *_Nullable *)images
-                 totalDuration:(CGFloat *_Nullable)totalDuration {
++ (BOOL)framesFromAnimatedData:(NSData *)data scale:(CGFloat)scale images:(NSArray<UIImage *> *_Nullable *)images totalDuration:(CGFloat *_Nullable)totalDuration {
     if (images) {
         *images = nil;
     }
@@ -1513,6 +1613,9 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     return success;
 }
 
+// 保存到系统相册：必须走 Photos 框架的 performChanges（系统会弹出授权框），
+// 完成回调在系统队列里执行，这里再 dispatch_async 回主线程通知调用方，并顺手
+// 删掉临时 GIF 文件。注意"回调要回主线程"是贯穿整个文件的约定。
 + (void)saveGIFToPhotoLibrary:(NSString *)path completion:(void (^)(BOOL success, NSError *error))completion {
     NSURL *fileURL = [NSURL fileURLWithPath:path];
     [[PHPhotoLibrary sharedPhotoLibrary]
@@ -1562,9 +1665,7 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     return audioTracks.count > 0;
 }
 
-+ (void)downloadAudioAndMergeWithVideo:(NSURL *)videoURL
-                              audioURL:(NSURL *)audioURL
-                            completion:(void (^)(BOOL success, NSURL *mergedURL))completion {
++ (void)downloadAudioAndMergeWithVideo:(NSURL *)videoURL audioURL:(NSURL *)audioURL completion:(void (^)(BOOL success, NSURL *mergedURL))completion {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
       NSData *audioData = [NSData dataWithContentsOfURL:audioURL];
       if (!audioData) {
@@ -1600,9 +1701,11 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     });
 }
 
-+ (void)mergeVideo:(NSURL *)videoURL
-         withAudio:(NSURL *)audioURL
-        completion:(void (^)(BOOL success, NSURL *mergedURL))completion {
+// 视频+音频合成为新视频：AVFoundation 的轨道读写耗时较重，整个流程丢到全局后台
+// 队列执行，避免卡住主线程（否则滑动列表会掉帧）。AVAssetExportSession 导出
+// 本身也是异步的（exportAsynchronouslyWithCompletionHandler:），完成后同样
+// dispatch_async 回主线程回调调用方。
++ (void)mergeVideo:(NSURL *)videoURL withAudio:(NSURL *)audioURL completion:(void (^)(BOOL success, NSURL *mergedURL))completion {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
       AVURLAsset *videoAsset = [AVURLAsset URLAssetWithURL:videoURL options:nil];
       AVURLAsset *audioAsset = [AVURLAsset URLAssetWithURL:audioURL options:nil];
@@ -1743,8 +1846,18 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     });
 }
 
+// ==== 功能区块五：颜色方案引擎 ====
+// 把用户设置的字符串（"#FF0000" 十六进制、"random" 随机色、
+// "rainbow_rotating" 旋转彩虹、"red,blue" 渐变）统一解析成 UIColor 或 CALayer。
+// 颜色工具可能被多个线程同时调用，下面的全局状态配合了三种并发手段。
 #pragma mark - Public Color Scheme Methods (公共颜色方案方法)
 
+// 颜色方案的全局共享状态，三行对应三种线程安全手段（颜色工具会被多线程并发调用）：
+// 1. atomic_uint_fast64_t：原子计数器，让"旋转彩虹"每帧自动轮换颜色；用
+//    atomic_fetch_add 递增在并发下也不会算错，普通 uint 并发自增会丢值。
+// 2. os_unfair_lock：低开销的互斥锁，保护"创建颜色 + 写缓存"临界区。它是苹果
+//    官方推荐的新锁（替代已废弃的自旋锁），比 NSLock 更轻量。
+// 3. NSCache 本身线程安全：读缓存不加锁，只有"写缓存"才进锁。
 static NSCache *_gradientColorCache;
 static NSArray<UIColor *> *_baseRainbowColors;
 static atomic_uint_fast64_t _rainbowRotationCounter = 0;
@@ -1822,8 +1935,8 @@ static os_unfair_lock _staticColorCreationLock = OS_UNFAIR_LOCK_INIT;
     BOOL allowCache = normalizedKey.length == 0 ? YES : !DYYYColorKeyIsDynamic(normalizedKey);
 
     DYYYLabelColorState *state = objc_getAssociatedObject(label, &kLabelColorStateKey);
-    if (allowCache && state && DYYYStringsEqual(state.textSignature, textSignature) && DYYYStringsEqual(state.colorKey, normalizedKey ?: @"") &&
-        DYYYStringsEqual(state.fontName, fontName) && fabs(state.fontSize - fontSize) <= 0.01) {
+    if (allowCache && state && DYYYStringsEqual(state.textSignature, textSignature) && DYYYStringsEqual(state.colorKey, normalizedKey ?: @"") && DYYYStringsEqual(state.fontName, fontName) &&
+        fabs(state.fontSize - fontSize) <= 0.01) {
         return;
     }
 
@@ -1848,8 +1961,7 @@ static os_unfair_lock _staticColorCreationLock = OS_UNFAIR_LOCK_INIT;
         [attributedText addAttribute:NSForegroundColorAttributeName value:[UIColor whiteColor] range:fullRange];
     } else {
         CGSize maxTextSize = CGSizeMake(CGFLOAT_MAX, label.bounds.size.height);
-        CGRect textRect =
-            [attributedText boundingRectWithSize:maxTextSize options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading context:nil];
+        CGRect textRect = [attributedText boundingRectWithSize:maxTextSize options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading context:nil];
         CGFloat actualTextWidth = MAX(1.0, ceil(textRect.size.width));
 
         UIColor *finalTextColor = [self colorFromSchemeHexString:colorHexString targetWidth:actualTextWidth];
@@ -1907,6 +2019,12 @@ static os_unfair_lock _staticColorCreationLock = OS_UNFAIR_LOCK_INIT;
     label.attributedText = mutableAttributedText;
 }
 
+// 颜色方案字符串 -> UIColor 的总入口，依次处理：random（随机纯色）、
+// random_gradient（随机渐变）、rainbow_rotating（旋转彩虹）、普通十六进制/渐变。
+// 注意方法中段的"双重检查锁"模式：先无锁读缓存（NSCache 线程安全，命中直接
+// 返回，避免每次抢锁的开销），没命中才拿 os_unfair_lock 进临界区；进锁后再次
+// 查缓存，确认没有别的线程已经生成过，然后创建并写回。这是并发场景下
+// "先走快速路径、再走慢速路径"的典型写法。
 + (UIColor *)colorFromSchemeHexString:(NSString *)hexString targetWidth:(CGFloat)targetWidth {
     if (!hexString || hexString.length == 0) {
         return [UIColor whiteColor];
@@ -2253,6 +2371,10 @@ static os_unfair_lock _staticColorCreationLock = OS_UNFAIR_LOCK_INIT;
     return image;
 }
 
+// ==== 版本比较 ====
+// 逐段按数字比较版本号："1.9" < "1.10" 才是正确结果；而字符串比较会得出
+// "1.9" > "1.10"（'9' 大于 '1'）。所以必须按小数点拆开、转成整数逐位比，
+// 两串段数不一致时，缺的段按 0 处理。
 #pragma mark - Version Utilities
 
 + (NSComparisonResult)compareVersion:(NSString *)lhs toVersion:(NSString *)rhs {
@@ -2285,6 +2407,11 @@ static os_unfair_lock _staticColorCreationLock = OS_UNFAIR_LOCK_INIT;
     return NSOrderedSame;
 }
 
+// ==== 调试工具 ====
+// 把整个 App 的窗口/视图树（控件层级、frame、文字内容）导出成文本文件，
+// 排查"插件界面没生效"时极有用。分两步：先在主线程快照（UIView 属性只能在
+// 主线程读，所以即使要写文件也要先取好数据），再丢到后台线程写盘避免阻塞 UI；
+// 沙盒路径不可写时回退到 Documents 目录。
 #pragma mark - Debug Utilities (调试工具)
 
 static NSString *DYYYSafeDescription(id _Nullable obj) {
@@ -2329,22 +2456,12 @@ static void DYYYAppendViewTree(UIView *view, NSMutableString *buffer, NSUInteger
     } else if ([view isKindOfClass:[UIImageView class]]) {
         UIImage *image = ((UIImageView *)view).image;
         if (image) {
-            extra = [NSString stringWithFormat:@" image=%@x%@",
-                     @(image.size.width), @(image.size.height)];
+            extra = [NSString stringWithFormat:@" image=%@x%@", @(image.size.width), @(image.size.height)];
         }
     }
 
-    [buffer appendFormat:@"%@<%@: %p> frame={%.1f,%.1f,%.1f,%.1f} alpha=%.2f hidden=%d uie=%d tag=%ld a11y=\"%@\"%@\n",
-     indent,
-     className,
-     view,
-     frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
-     view.alpha,
-     view.hidden,
-     view.userInteractionEnabled,
-     (long)view.tag,
-     DYYYSafeDescription(accessibility),
-     extra];
+    [buffer appendFormat:@"%@<%@: %p> frame={%.1f,%.1f,%.1f,%.1f} alpha=%.2f hidden=%d uie=%d tag=%ld a11y=\"%@\"%@\n", indent, className, view, frame.origin.x, frame.origin.y, frame.size.width,
+                         frame.size.height, view.alpha, view.hidden, view.userInteractionEnabled, (long)view.tag, DYYYSafeDescription(accessibility), extra];
 
     for (UIView *subview in view.subviews) {
         DYYYAppendViewTree(subview, buffer, depth + 1);
@@ -2367,13 +2484,8 @@ static void DYYYAppendViewTree(UIView *view, NSMutableString *buffer, NSUInteger
     [buffer appendFormat:@"# windows count = %lu\n\n", (unsigned long)windows.count];
     NSUInteger windowIndex = 0;
     for (UIWindow *window in windows) {
-        [buffer appendFormat:@"==== Window[%lu] %@ keyWindow=%d level=%.1f hidden=%d alpha=%.2f ====\n",
-         (unsigned long)windowIndex,
-         NSStringFromClass([window class]),
-         window.isKeyWindow,
-         (double)window.windowLevel,
-         window.hidden,
-         window.alpha];
+        [buffer appendFormat:@"==== Window[%lu] %@ keyWindow=%d level=%.1f hidden=%d alpha=%.2f ====\n", (unsigned long)windowIndex, NSStringFromClass([window class]), window.isKeyWindow,
+                             (double)window.windowLevel, window.hidden, window.alpha];
         DYYYAppendViewTree(window, buffer, 0);
         [buffer appendString:@"\n"];
         windowIndex++;
@@ -2383,33 +2495,31 @@ static void DYYYAppendViewTree(UIView *view, NSMutableString *buffer, NSUInteger
 
     // 后台线程写入，避免阻塞 UI
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        NSError *writeError = nil;
-        BOOL ok = [buffer writeToFile:targetPath
-                           atomically:YES
-                             encoding:NSUTF8StringEncoding
-                                error:&writeError];
-        if (!ok) {
-            // sandbox 环境下 /var/mobile 可能不可写，fallback 到 Documents
-            NSString *documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-            if (documents) {
-                NSString *fallback = [documents stringByAppendingPathComponent:[targetPath lastPathComponent]];
-                NSError *fallbackError = nil;
-                BOOL fallbackOK = [buffer writeToFile:fallback
-                                           atomically:YES
-                                             encoding:NSUTF8StringEncoding
-                                                error:&fallbackError];
-                NSLog(@"[DYYY] dump view tree fallback to %@ ok=%d err=%@", fallback, fallbackOK, fallbackError);
-            } else {
-                NSLog(@"[DYYY] dump view tree failed: %@", writeError);
-            }
-        } else {
-            NSLog(@"[DYYY] dump view tree to %@ size=%lu", targetPath, (unsigned long)buffer.length);
-        }
+      NSError *writeError = nil;
+      BOOL ok = [buffer writeToFile:targetPath atomically:YES encoding:NSUTF8StringEncoding error:&writeError];
+      if (!ok) {
+          // sandbox 环境下 /var/mobile 可能不可写，fallback 到 Documents
+          NSString *documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+          if (documents) {
+              NSString *fallback = [documents stringByAppendingPathComponent:[targetPath lastPathComponent]];
+              NSError *fallbackError = nil;
+              BOOL fallbackOK = [buffer writeToFile:fallback atomically:YES encoding:NSUTF8StringEncoding error:&fallbackError];
+              NSLog(@"[DYYY] dump view tree fallback to %@ ok=%d err=%@", fallback, fallbackOK, fallbackError);
+          } else {
+              NSLog(@"[DYYY] dump view tree failed: %@", writeError);
+          }
+      } else {
+          NSLog(@"[DYYY] dump view tree to %@ size=%lu", targetPath, (unsigned long)buffer.length);
+      }
     });
 }
 
 @end
 
+// ==== 外部 C 函数 ====
+// 用全局 C 函数（而非类方法）再包一层，是为了让 Logos 钩子（%hook 等 C 风格
+// 上下文）或其他纯 C 代码不用发 ObjC 消息就能直接调用，例如 topView() 一行
+// 拿到顶层控制器。这里的函数只是把内部实现转发给 DYYYUtils 的类方法。
 #pragma mark - External C Functions (外部 C 函数)
 
 NSString *cleanShareURL(NSString *url) {
@@ -2465,6 +2575,9 @@ void applyTopBarTransparency(UIView *topBar) {
     }
 }
 
+// 把任意对象递归转成"可安全 JSON 序列化"的形式：NSData 转 Base64 字符串——
+// JSON 是文本格式装不下二进制，Base64 是二进制转文本的标准编码，可逆且安全；
+// NSDate 转时间戳、数组/字典递归处理、其他对象退回 description。
 id DYYYJSONSafeObject(id obj) {
     if (!obj || obj == [NSNull null]) {
         return [NSNull null];

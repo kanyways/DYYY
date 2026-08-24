@@ -10,8 +10,44 @@
 #import "DYYYToast.h"
 #import "DYYYUtils.h"
 
+// ============================================================================
+// DYYYManager：DYYY 插件的中枢管理类（单例）
+// ----------------------------------------------------------------------------
+// 【它在插件里的定位】
+// 插件入口是 DYYY.xm（Logos 文件），用 %hook 拦截抖音 App 里的事件（长按视频、
+// 评论列表、分享按钮等）。拦截到事件后真正干活的是本类的类方法，例如：
+//   [DYYYManager downloadMedia:...]          下载视频/图片
+//   [DYYYManager saveCommentImages:...]      保存评论区图片
+//   [DYYYManager createVideoFromMedia:...]   把图片/实况照片合成视频
+// 本类不是被某个对象主动创建的：+shared 用懒加载单例，第一次被调用时创建，
+// 之后整个 App 进程生命周期内全局只有这一份实例（见下方 +shared 注释）。
+//
+// 【与 DYYYUtils 的分工】
+// DYYYUtils 是无状态工具类（弹 Toast、格式转换等静态方法）；
+// DYYYManager 负责有状态部分：下载任务登记、进度、回调、临时文件清理，
+// 以及实况照片写入、视频合成这类需要跨多个方法协作的复杂流程。
+//
+// 【文件内区块导航】
+//   L13-39     类扩展：私有状态（下载任务/进度/回调字典等）
+//   L43-74     单例与初始化
+//   L76-199    保存媒体到相册（含 HEIC/GIF 格式转换）
+//   L201-431   实况照片下载 + KVO 进度回调
+//   L433-841   单个/批量下载、批量计数、下载收尾
+//   L843-1031  NSURLSessionDownloadDelegate 实现（本类充当所有下载的代理）
+//   L1033-1234 实况照片写入相册（AVAssetReader/Writer 注入元数据）
+//   L1236-1681 评论区图片/实况照片批量保存
+//   L1801-2072 分享链接解析（运行时调用抖音私有 UI 类）
+//   L2074-2867 视频合成（AVMutableComposition）
+//   L2869-3086 动画贴纸转 GIF、评论区语音下载分享
+// ============================================================================
 
 @interface DYYYManager () {
+    // 实例变量区：AVFoundation 对象用于「实况照片」保存流程。
+    // 实况照片 = 一张图片 + 一段配对视频，两者靠相同的内容标识符(identifier)绑定，
+    // 需要用 AVAssetReader 读原视频、AVAssetWriter 重写一份带标识符的副本。
+    // 注意这些是共享实例变量：旧版流程(useAssetWriter)复用它们，同一时刻只能跑
+    // 一个任务；批量保存流程(见 addMetadataToVideoWithLocalVars)改用局部变量
+    // 传递 reader/writer/queue/group，避免多个任务并发时互相覆盖。
     AVAssetExportSession *session;
     AVURLAsset *asset;
     AVAssetReader *reader;
@@ -21,6 +57,12 @@
 }
 @end
 
+// ===== 下载任务的登记册 =====
+// 本插件的下载采用「ID 登记册」模式：每次下载生成一个 UUID(downloadID)，
+// 同一个 ID 作为 key 分散登记在多个字典里（任务、进度视图、完成回调、
+// 媒体类型），代理回调时按 ID 取回各自的状态。
+// 批量下载以批量 ID(batchID) 为单位再登记一套计数/回调，
+// 通过 downloadToBatchMap 把单个下载 ID 关联到所属批量。
 @interface DYYYManager () <NSURLSessionDownloadDelegate>
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSURLSessionDownloadTask *> *downloadTasks;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, DYYYToast *> *progressViews;
@@ -41,6 +83,12 @@
 
 @implementation DYYYManager
 
+// ===== 单例与初始化 =====
+// dispatch_once 保证这段代码在进程生命周期内只执行一次，且线程安全：
+// 无论多少线程同时调用 +shared，也只有一个线程能创建实例。
+// static 局部变量 + dispatch_once 是 ObjC 最标准的单例写法（无需加锁）。
+// -init 里把所有登记册字典建好；downloadQueue 限 3 个并发操作，
+// 但实际下载走 NSURLSession，该队列主要用于控制节奏。
 + (instancetype)shared {
     static DYYYManager *sharedInstance = nil;
     static dispatch_once_t onceToken;
@@ -74,6 +122,15 @@
     return self;
 }
 
+// ===== 保存媒体到相册 =====
+// 要点：
+// 1. 相册写入前必须先请求权限，权限回调在任意队列，
+//    所以其中的 UI 操作（Toast）都 dispatch 回主线程；
+// 2. 音频不保存到相册（相册不收 mp3），提前返回失败；
+// 3. 无论成败都删除临时文件并通知 finalizeDownload 收尾，
+//    防止临时文件泄漏占满存储；
+// 4. HEIC 类型先探测真实格式（可能是 webp/heic/gif），
+//    相册不认识的格式先转成 GIF 再保存。
 + (void)saveMedia:(NSURL *)mediaURL mediaType:(MediaType)mediaType completion:(void (^)(BOOL success))completion {
     if (mediaType == MediaTypeAudio) {
         if (completion) {
@@ -98,12 +155,12 @@
       }
 
       void (^reportResult)(BOOL) = ^(BOOL success) {
-          dispatch_async(dispatch_get_main_queue(), ^{
-            [[DYYYManager shared] finalizeDownloadWithFileURL:mediaURL success:success];
-            if (completion) {
-                completion(success);
-            }
-          });
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [[DYYYManager shared] finalizeDownloadWithFileURL:mediaURL success:success];
+          if (completion) {
+              completion(success);
+          }
+        });
       };
 
       if (mediaType == MediaTypeHeic) {
@@ -112,48 +169,48 @@
           if ([actualFormat isEqualToString:@"webp"]) {
               [DYYYUtils convertWebpToGifSafely:mediaURL
                                      completion:^(NSURL *gifURL, BOOL success) {
-                                  if (success && gifURL) {
-                                      [DYYYUtils saveGifToPhotoLibrary:gifURL
-                                                            completion:^(BOOL gifSuccess) {
-                                                         [[NSFileManager defaultManager] removeItemAtPath:mediaURL.path error:nil];
-                                                         reportResult(gifSuccess);
-                                                       }];
-                                  } else {
-                                      dispatch_async(dispatch_get_main_queue(), ^{
-                                        [DYYYUtils showToast:@"转换失败"];
-                                        [[NSFileManager defaultManager] removeItemAtPath:mediaURL.path error:nil];
-                                        reportResult(NO);
-                                      });
-                                  }
-                                }];
+                                       if (success && gifURL) {
+                                           [DYYYUtils saveGifToPhotoLibrary:gifURL
+                                                                 completion:^(BOOL gifSuccess) {
+                                                                   [[NSFileManager defaultManager] removeItemAtPath:mediaURL.path error:nil];
+                                                                   reportResult(gifSuccess);
+                                                                 }];
+                                       } else {
+                                           dispatch_async(dispatch_get_main_queue(), ^{
+                                             [DYYYUtils showToast:@"转换失败"];
+                                             [[NSFileManager defaultManager] removeItemAtPath:mediaURL.path error:nil];
+                                             reportResult(NO);
+                                           });
+                                       }
+                                     }];
               return;
           }
 
           if ([actualFormat isEqualToString:@"heic"] || [actualFormat isEqualToString:@"heif"]) {
               [DYYYUtils convertHeicToGif:mediaURL
                                completion:^(NSURL *gifURL, BOOL success) {
-                            if (success && gifURL) {
-                                [DYYYUtils saveGifToPhotoLibrary:gifURL
-                                                      completion:^(BOOL gifSuccess) {
-                                                   [[NSFileManager defaultManager] removeItemAtPath:mediaURL.path error:nil];
-                                                   reportResult(gifSuccess);
-                                                 }];
-                            } else {
-                                dispatch_async(dispatch_get_main_queue(), ^{
-                                  [DYYYUtils showToast:@"转换失败"];
-                                  [[NSFileManager defaultManager] removeItemAtPath:mediaURL.path error:nil];
-                                  reportResult(NO);
-                                });
-                            }
-                          }];
+                                 if (success && gifURL) {
+                                     [DYYYUtils saveGifToPhotoLibrary:gifURL
+                                                           completion:^(BOOL gifSuccess) {
+                                                             [[NSFileManager defaultManager] removeItemAtPath:mediaURL.path error:nil];
+                                                             reportResult(gifSuccess);
+                                                           }];
+                                 } else {
+                                     dispatch_async(dispatch_get_main_queue(), ^{
+                                       [DYYYUtils showToast:@"转换失败"];
+                                       [[NSFileManager defaultManager] removeItemAtPath:mediaURL.path error:nil];
+                                       reportResult(NO);
+                                     });
+                                 }
+                               }];
               return;
           }
 
           if ([actualFormat isEqualToString:@"gif"]) {
               [DYYYUtils saveGifToPhotoLibrary:mediaURL
                                     completion:^(BOOL gifSuccess) {
-                                 reportResult(gifSuccess);
-                               }];
+                                      reportResult(gifSuccess);
+                                    }];
               return;
           }
 
@@ -199,6 +256,11 @@
     }];
 }
 
+// ===== 下载实况照片（入口）=====
+// 缓存优先设计：同一组(图片URL+视频URL)生成唯一 key 存入 fileLinks，
+// 重复下载相同实况照片时直接复用已下载的文件，避免重复请求。
+// 文件存在性检查放到后台队列做（文件 IO 耗时，避免卡主线程），
+// 检查完再跳回主线程决定是直接保存还是重新下载。
 + (void)downloadLivePhoto:(NSURL *)imageURL videoURL:(NSURL *)videoURL completion:(void (^)(void))completion {
     // 获取共享实例，确保FileLinks字典存在
     DYYYManager *manager = [DYYYManager shared];
@@ -239,6 +301,12 @@
     }
 }
 
+// 实况照片 = 图片 + 视频两个文件，用 dispatch_group 协调两个下载任务：
+// 每个任务 enter 一次，两个都完成(leave)后 notify 统一处理后续。
+// NSURLSession 的 delegate 传 [DYYYManager shared]（本类实现了
+// NSURLSessionDownloadDelegate），以收到下载进度；每个任务的
+// NSProgress 再用 KVO 观察(见 observeValueForKeyPath)，两个进度
+// 取平均后由 0.1 秒的定时器刷新合并进度条。
 + (void)startDownloadLivePhotoProcess:(NSURL *)imageURL videoURL:(NSURL *)videoURL uniqueKey:(NSString *)uniqueKey completion:(void (^)(void))completion {
     // 创建临时目录
     NSString *livePhotoPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"LivePhoto"];
@@ -305,7 +373,7 @@
                                                                                [timer invalidate];  // 全部完成时停止定时器
                                                                                progressTimer = nil;
                                                                            }
-                                                                        }];
+                                                                         }];
 
       // 下载图片
       dispatch_group_enter(group);
@@ -417,6 +485,11 @@
     });
 }
 
+// ===== KVO 回调 =====
+// KVO（键值观察）：addObserver 时传入的 context 指针会被原样带回，
+// 这里用它携带 downloadID，回调里无需再去字典里反查。
+// 注意：自己没处理的通知必须转交 super，否则观察者收到未处理消息会异常。
+// NSProgress.fractionCompleted 是系统下载进度(0~1)，写入 taskProgressMap 登记。
 // 需要添加KVO回调方法来处理下载进度
 - (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary<NSKeyValueChangeKey, id> *)change context:(void *)context {
     if ([keyPath isEqualToString:@"fractionCompleted"] && [object isKindOfClass:[NSProgress class]]) {
@@ -438,9 +511,9 @@
                            progress:nil
                          completion:^(BOOL success, NSURL *fileURL) {
                            void (^notifyCompletion)(BOOL) = ^(BOOL result) {
-                               if (completion) {
-                                   completion(result);
-                               }
+                             if (completion) {
+                                 completion(result);
+                             }
                            };
 
                            if (success) {
@@ -464,22 +537,22 @@
                                            [DYYYUtils downloadAudioAndMergeWithVideo:fileURL
                                                                             audioURL:audioURL
                                                                           completion:^(BOOL mergeSuccess, NSURL *mergedURL) {
-                                                                       if (mergeSuccess) {
-                                                                           [[DYYYManager shared] replaceFileURL:fileURL withFileURL:mergedURL];
-                                                                           [[NSFileManager defaultManager] removeItemAtURL:fileURL error:nil];
-                                                                           [self saveMedia:mergedURL
-                                                                                 mediaType:mediaType
-                                                                                completion:^(BOOL saveSuccess) {
-                                                                                  notifyCompletion(saveSuccess);
-                                                                                }];
-                                                                       } else {
-                                                                           [self saveMedia:fileURL
-                                                                                 mediaType:mediaType
-                                                                                completion:^(BOOL saveSuccess) {
-                                                                                  notifyCompletion(saveSuccess);
-                                                                                }];
-                                                                       }
-                                                                     }];
+                                                                            if (mergeSuccess) {
+                                                                                [[DYYYManager shared] replaceFileURL:fileURL withFileURL:mergedURL];
+                                                                                [[NSFileManager defaultManager] removeItemAtURL:fileURL error:nil];
+                                                                                [self saveMedia:mergedURL
+                                                                                      mediaType:mediaType
+                                                                                     completion:^(BOOL saveSuccess) {
+                                                                                       notifyCompletion(saveSuccess);
+                                                                                     }];
+                                                                            } else {
+                                                                                [self saveMedia:fileURL
+                                                                                      mediaType:mediaType
+                                                                                     completion:^(BOOL saveSuccess) {
+                                                                                       notifyCompletion(saveSuccess);
+                                                                                     }];
+                                                                            }
+                                                                          }];
                                            return;
                                        }
                                    }
@@ -498,6 +571,11 @@
                          }];
 }
 
+// ===== 单个媒体下载（带进度）=====
+// 全程在主线程执行的原因：进度视图(DYYYToast)是 UI 控件，
+// UIKit 规定 UI 只能在主线程创建/操作。
+// downloadID 同时写入 downloadTask.taskDescription，这样代理回调时
+// 可以从任务对象反查到对应的登记 ID。
 + (void)downloadMediaWithProgress:(NSURL *)url
                         mediaType:(MediaType)mediaType
                             audio:(NSURL *)audioURL
@@ -666,6 +744,12 @@
     [self.downloadToBatchMap setObject:batchID forKey:downloadID];
 }
 
+// ===== 批量下载计数（为什么加锁）=====
+// 批量下载里每张图完成后都会回调到这里累加计数。这些回调可能来自不同
+// 线程：进度代理走主线程，而 dataTask 的 completionHandler 在后台线程执行。
+// 因此用 @synchronized(self) 把计数、进度、完成判定包成临界区，
+// 防止多线程同时读写同一批字典造成崩溃或计数错乱。
+// 最后一个任务完成(completedCount >= totalCount)时统一触发完成回调并清理。
 // 批量下载完成计数并更新进度
 - (void)incrementCompletedAndUpdateProgressForBatch:(NSString *)batchID success:(BOOL)success {
     @synchronized(self) {
@@ -735,6 +819,10 @@
     [self.mediaTypeMap setObject:@(mediaType) forKey:downloadID];
 }
 
+// ===== 文件路径 -> 下载ID 的反向登记 =====
+// 下载完成的文件落到临时目录后，后续流程（保存相册、合并音频）只拿到
+// 文件 URL 而不知道 downloadID；这组方法维护「路径 -> ID」反查表，
+// 让拿着文件也能找到任务状态。字典会被多个队列访问，一律 @synchronized 保护。
 - (void)associateFileURL:(NSURL *)fileURL withDownloadID:(NSString *)downloadID {
     if (!fileURL || downloadID.length == 0) {
         return;
@@ -806,6 +894,10 @@
     [self finalizeDownloadWithID:downloadID success:success fileURL:fileURL];
 }
 
+// ===== 下载收尾 =====
+// 无论成败最终都走这里：切回主线程隐藏进度条，并把该 downloadID 的
+// 所有登记（进度、回调、任务、批量关联）从各字典移除。
+// 登记册字典只增不减会越积越大，这一步是防止内存泄漏的关键。
 - (void)finalizeDownloadWithID:(NSString *)downloadID success:(BOOL)success fileURL:(NSURL *_Nullable)fileURL {
     if (downloadID.length == 0) {
         return;
@@ -841,6 +933,10 @@
     }
 }
 
+// ===== NSURLSessionDownloadDelegate 实现 =====
+// 创建 session 时把 delegate 传成 [DYYYManager shared]，本类即所有下载的代理。
+// delegateQueue 指定为主队列，这些回调天然跑在主线程，可直接操作 UI；
+// 但进度回调频率极高（几乎每个数据包一次），回调体尽量保持轻量。
 #pragma mark - NSURLSessionDownloadDelegate
 
 - (void)URLSession:(NSURLSession *)session
@@ -881,6 +977,12 @@
     });
 }
 
+// ===== 下载完成 =====
+// 下载完成的文件位于 session 的临时 location，必须立刻用 moveItemAtURL
+// 搬到自己的临时目录，否则随时可能被系统回收。
+// 文件名无扩展名时按 mediaType 补默认扩展名；移动成功后分两条路：
+// 批量下载 -> 直接存相册并累加批量计数；
+// 单个下载 -> 登记路径映射，把文件 URL 通过完成回调交给调用方。
 // 下载完成的代理方法
 - (void)URLSession:(NSURLSession *)session downloadTask:(NSURLSessionDownloadTask *)downloadTask didFinishDownloadingToURL:(NSURL *)location {
     // 找到对应的下载ID
@@ -979,6 +1081,10 @@
     }
 }
 
+// ===== 下载出错 =====
+// 成功路径已在 didFinishDownloadingToURL 处理，这里只处理错误。
+// NSURLErrorCancelled 是用户主动取消（见 cancelAllDownloads），不弹错误提示；
+// 其余错误弹 Toast，并走 finalizeDownloadWithID 收尾，避免状态残留。
 - (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
     if (!error) {
         return;  // 成功完成的情况已在didFinishDownloadingToURL处理
@@ -1031,6 +1137,13 @@
     }
 }
 
+// ===== 实况照片写入相册 =====
+// 实况照片的本质：相册里一条「图片+配对视频」资源，两者带相同的内容标识符。
+// 流程分三步：
+// 1. addMetadataToPhoto / addMetadataToVideo 分别给图片和视频写入
+//    相同的 identifier 元数据（缺了它相册不认这是实况照片）；
+// 2. dispatch_group_notify 等待两段元数据重写全部完成；
+// 3. PHAssetCreationRequest 把「照片+配对视频」两条资源一起提交给相册。
 // MARK: 以下都是创建保存实况的调用方法
 - (void)saveLivePhoto:(NSString *)imageSourcePath videoUrl:(NSString *)videoSourcePath {
     // 首先检查iOS版本
@@ -1110,6 +1223,12 @@
     [data writeToFile:outputFile atomically:YES];
 }
 
+// 用 AVAssetReader(解码) + AVAssetWriter(编码) 重写视频并注入元数据：
+// 读取原视频的每个轨道 -> 逐个写进新文件 -> 追加内容标识符和
+// "still-image-time" 定时元数据（实况照片规范要求的标记）。
+// 这里把 reader/writer/queue/group 存进共享实例变量供 writeTrack /
+// finishWritingTracksWithPhoto 协作使用——同一时刻只能跑一个任务；
+// 批量场景改用 addMetadataToVideoWithLocalVars（局部变量版）规避竞态。
 - (void)addMetadataToVideo:(NSURL *)videoURL outputFile:(NSString *)outputFile identifier:(NSString *)identifier {
     NSError *error = nil;
     AVAsset *asset = [AVAsset assetWithURL:videoURL];
@@ -1164,6 +1283,10 @@
     }
 }
 
+// 逐轨道搬运：requestMediaDataWhenReadyOnQueue 是「拉取式」写法——
+// writer 准备好接收数据时回调这个 block，block 内循环取样本
+// (copyNextSampleBuffer)写入，取完/出错即 markAsFinished 并 leave group。
+// copyNextSampleBuffer 返回的 C 对象必须 CFRelease 手动释放，否则内存泄漏。
 - (void)writeTrack:(NSInteger)trackIndex {
     AVAssetReaderOutput *output = DYYYManager.shared->reader.outputs[trackIndex];
     AVAssetWriterInput *input = DYYYManager.shared->writer.inputs[trackIndex];
@@ -1234,33 +1357,38 @@
     }
 }
 
+// ===== 评论区图片批量保存 =====
+// 评论图片模型是抖音的私有类(AWECommentImageModel)，编译期无法引用，
+// 所以用 KVC(valueForKey:) 反射式读取字段，再以 @try/@catch 兜住
+// 「字段名变动/模型为空」等运行时异常——这是 tweak 访问宿主 App 私有
+// 数据的常见手段。解析出的 URL 以字符串形式传递；实况照片(图片+视频
+// 成对)与普通图片分两条流水线下载，最后用 dispatch_group 汇总成败。
 #pragma mark - 评论区图片保存
 
-+ (void)saveCommentImages:(NSArray *)imageModels
-             currentIndex:(NSInteger)currentIndex
-               completion:(void (^)(NSInteger successCount, NSInteger livePhotoCount, NSInteger failedCount))completion {
++ (void)saveCommentImages:(NSArray *)imageModels currentIndex:(NSInteger)currentIndex completion:(void (^)(NSInteger successCount, NSInteger livePhotoCount, NSInteger failedCount))completion {
     if (!imageModels || imageModels.count == 0) {
-        if (completion) completion(0, 0, 0);
+        if (completion)
+            completion(0, 0, 0);
         return;
     }
-    
+
     // 确定要保存的图片
     NSArray *imagesToSave = nil;
     if (currentIndex >= 0 && currentIndex < (NSInteger)imageModels.count) {
-        imagesToSave = @[imageModels[currentIndex]];
+        imagesToSave = @[ imageModels[currentIndex] ];
     } else {
         imagesToSave = imageModels;
     }
-    
+
     // 分离普通图片和实况照片
     NSMutableArray *normalImages = [NSMutableArray array];
     NSMutableArray *livePhotos = [NSMutableArray array];
-    
+
     for (id imageModel in imagesToSave) {
         @try {
             // 获取图片 URL - originUrl 和 mediumUrl 都是 AWEURLModel 类型
             NSString *imageUrlStr = nil;
-            
+
             // 首先尝试 originUrl
             AWEURLModel *originUrlModel = [imageModel valueForKey:@"originUrl"];
             if (originUrlModel) {
@@ -1269,7 +1397,7 @@
                     imageUrlStr = urlList.firstObject;
                 }
             }
-            
+
             // 如果 originUrl 没有获取到，尝试 mediumUrl
             if (!imageUrlStr) {
                 AWEURLModel *mediumUrlModel = [imageModel valueForKey:@"mediumUrl"];
@@ -1280,14 +1408,14 @@
                     }
                 }
             }
-            
+
             NSLog(@"[DYYY] 评论图片URL: %@", imageUrlStr);
-            
+
             if (!imageUrlStr || imageUrlStr.length == 0) {
                 NSLog(@"[DYYY] 无法获取图片URL，imageModel: %@", imageModel);
                 continue;
             }
-            
+
             // 检查是否是实况照片
             id livePhotoModel = [imageModel valueForKey:@"livePhotoModel"];
             if (livePhotoModel) {
@@ -1296,65 +1424,63 @@
                     NSString *videoUrlStr = videoUrls.firstObject;
                     if (videoUrlStr && videoUrlStr.length > 0) {
                         // 传入字符串而不是 NSURL，与 downloadAllLivePhotosWithProgress 期望的格式一致
-                        [livePhotos addObject:@{
-                            @"imageURL": imageUrlStr,
-                            @"videoURL": videoUrlStr
-                        }];
+                        [livePhotos addObject:@{@"imageURL" : imageUrlStr, @"videoURL" : videoUrlStr}];
                         continue;
                     }
                 }
             }
-            
+
             // 普通图片 - 存储字符串而不是 NSURL
             [normalImages addObject:imageUrlStr];
         } @catch (NSException *e) {
             NSLog(@"[DYYY] 解析评论图片失败: %@", e);
         }
     }
-    
+
     NSLog(@"[DYYY] 解析完成: 普通图片=%lu, 实况照片=%lu", (unsigned long)normalImages.count, (unsigned long)livePhotos.count);
-    
+
     // 如果都没有解析到有效URL，直接返回失败
     if (normalImages.count == 0 && livePhotos.count == 0) {
-        if (completion) completion(0, 0, (NSInteger)imagesToSave.count);
+        if (completion)
+            completion(0, 0, (NSInteger)imagesToSave.count);
         return;
     }
-    
+
     __block NSInteger successCount = 0;
     __block NSInteger livePhotoCount = 0;
     __block NSInteger failedCount = 0;
-    
+
     dispatch_group_t group = dispatch_group_create();
-    
+
     // 保存普通图片
     if (normalImages.count > 0) {
         dispatch_group_enter(group);
         [self downloadAllImagesWithProgress:[normalImages mutableCopy]
                                    progress:nil
                                  completion:^(NSInteger imgSuccess, NSInteger imgTotal) {
-            successCount += imgSuccess;
-            failedCount += (imgTotal - imgSuccess);
-            dispatch_group_leave(group);
-        }];
+                                   successCount += imgSuccess;
+                                   failedCount += (imgTotal - imgSuccess);
+                                   dispatch_group_leave(group);
+                                 }];
     }
-    
+
     // 保存实况照片
     if (livePhotos.count > 0) {
         dispatch_group_enter(group);
         [self downloadAllLivePhotosWithProgress:livePhotos
                                        progress:nil
                                      completion:^(NSInteger lpSuccess, NSInteger lpTotal) {
-            successCount += lpSuccess;
-            livePhotoCount = lpSuccess;
-            failedCount += (lpTotal - lpSuccess);
-            dispatch_group_leave(group);
-        }];
+                                       successCount += lpSuccess;
+                                       livePhotoCount = lpSuccess;
+                                       failedCount += (lpTotal - lpSuccess);
+                                       dispatch_group_leave(group);
+                                     }];
     }
-    
+
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-        if (completion) {
-            completion(successCount, livePhotoCount, failedCount);
-        }
+      if (completion) {
+          completion(successCount, livePhotoCount, failedCount);
+      }
     });
 }
 
@@ -1849,6 +1975,12 @@
     [dataTask resume];
 }
 
+// ===== 分享链接解析后的资源分发 =====
+// 接口返回的 data 可能包含多清晰度视频(video_list)、单视频、图片组、
+// 封面、背景音乐等，这里按优先级逐个尝试处理。
+// AWEUserActionSheetView / AWEUserSheetAction 是抖音私有 UI 类，
+// 用 NSClassFromString 在运行时按名字创建：编译时不依赖宿主 App 的类，
+// 抖音更新后类名变了也不影响编译（坏处是类名变了功能会静默失效）。
 + (void)handleVideoData:(NSDictionary *)dataDict {
     // 首先检查videos和images数组
     NSArray *videoList = dataDict[@"video_list"];
@@ -2076,6 +2208,12 @@
 }
 
 #define DYYYLogVideo(format, ...) NSLog((@"[DYYY视频合成] " format), ##__VA_ARGS__)
+// ===== 视频合成（总控）=====
+// 流水线式流程，用嵌套的 dispatch_group + notify 串成四个阶段：
+// 下载图片 -> 下载实况照片 -> 下载背景音乐 -> 合成视频并保存。
+// 阶段之间串行（下一阶段等上一阶段全部完成），阶段内部并行（同批文件
+// 同时下载）。进度用「总步数」模型：每完成一个小任务步数加一，
+// 换算成百分比刷新进度条。
 // 创建视频合成器从多种媒体源
 + (void)createVideoFromMedia:(NSArray<NSString *> *)imageURLs
                   livePhotos:(NSArray<NSDictionary *> *)livePhotos
@@ -2414,6 +2552,13 @@
     });
 }
 
+// ===== 合成核心 =====
+// 用 AVMutableComposition（时间线容器）把各片段按顺序插到 videoTrack 上，
+// 每个片段配一个 AVMutableVideoCompositionInstruction 指令，内含缩放变换，
+// 把不同尺寸的片段统一适配到 1080x1920。
+// 背景音乐时长不足视频总长时，用 while 循环把音轨重复 insertTimeRange
+// 直到覆盖全长——注意每轮都要裁剪剩余时长，防止越界。
+// 最后用 AVAssetExportSession 异步导出 mp4。
 // 视频合成核心方法
 + (void)composeVideo:(NSArray<NSString *> *)imageFiles
           livePhotos:(NSArray<NSDictionary *> *)livePhotoFiles
@@ -2752,6 +2897,10 @@
     });
 }
 
+// 静态图片没有画面帧，要参与合成必须先变成一段视频：
+// 把图片画进 CVPixelBuffer（CGBitmapContext 绘制，黑底、居中、按比例适配），
+// 然后按帧率(30fps)把同一个 buffer 通过 pixelBufferAdaptor 连续写入
+// AVAssetWriter。writer 没准备好时 usleep 短暂等待后重试，避免写入失败。
 // 创建从静态图片生成的视频片段
 + (void)createVideoFromImage:(UIImage *)image duration:(float)duration outputPath:(NSString *)outputPath completion:(void (^)(BOOL success))completion {
     // 视频尺寸和参数
@@ -2870,6 +3019,11 @@
     });
 }
 
+// ===== 动画贴纸转 GIF 保存 =====
+// 贴纸是 YYAnimatedImageView（YYKit 动图控件），无法直接存相册：
+// 先把每一帧取出来（帧数组+时长），用 DYYYUtils 编码成 GIF 再保存。
+// 帧抽取与 GIF 编码都是 CPU 密集操作，放到后台全局队列执行，
+// 完成后跳回主线程提示结果。
 // 动画贴纸和GIF相关方法迁移自 DYYYUtils.m
 + (void)saveAnimatedSticker:(YYAnimatedImageView *)targetStickerView {
     if (!targetStickerView) {
@@ -2907,13 +3061,13 @@
             }
             [DYYYUtils saveGIFToPhotoLibrary:tempPath
                                   completion:^(BOOL saved, NSError *error) {
-                               if (saved) {
-                                   [DYYYToast showSuccessToastWithMessage:@"已保存到相册"];
-                               } else {
-                                   NSString *errorMsg = error ? error.localizedDescription : @"未知错误";
-                                   [DYYYUtils showToast:[NSString stringWithFormat:@"保存失败: %@", errorMsg]];
-                               }
-                             }];
+                                    if (saved) {
+                                        [DYYYToast showSuccessToastWithMessage:@"已保存到相册"];
+                                    } else {
+                                        NSString *errorMsg = error ? error.localizedDescription : @"未知错误";
+                                        [DYYYUtils showToast:[NSString stringWithFormat:@"保存失败: %@", errorMsg]];
+                                    }
+                                  }];
           });
         });
       });
@@ -2928,164 +3082,170 @@
     }
     [DYYYUtils convertHeicToGif:heifURL
                      completion:^(NSURL *gifURL, BOOL success) {
-                         if (!success || !gifURL) {
-                             [DYYYUtils showToast:@"表情转换失败"];
-                             return;
-                         }
-                         [[PHPhotoLibrary sharedPhotoLibrary]
-                             performChanges:^{
-                               PHAssetCreationRequest *request = [PHAssetCreationRequest creationRequestForAsset];
-                               [request addResourceWithType:PHAssetResourceTypePhoto fileURL:gifURL options:nil];
-                             }
-                             completionHandler:^(BOOL success, NSError *_Nullable error) {
-                               dispatch_async(dispatch_get_main_queue(), ^{
-                                 if (success) {
-                                     [DYYYToast showSuccessToastWithMessage:@"已保存到相册"];
-                                 } else {
-                                     NSString *errorMsg = error ? error.localizedDescription : @"未知错误";
-                                     [DYYYUtils showToast:[NSString stringWithFormat:@"保存失败: %@", errorMsg]];
-                                 }
-                                 NSError *removeError = nil;
-                                 [[NSFileManager defaultManager] removeItemAtURL:gifURL error:&removeError];
-                                 if (removeError) {
-                                     NSLog(@"删除临时转换文件失败: %@", removeError);
-                                 }
-                               });
-                             }];
-                       }];
+                       if (!success || !gifURL) {
+                           [DYYYUtils showToast:@"表情转换失败"];
+                           return;
+                       }
+                       [[PHPhotoLibrary sharedPhotoLibrary]
+                           performChanges:^{
+                             PHAssetCreationRequest *request = [PHAssetCreationRequest creationRequestForAsset];
+                             [request addResourceWithType:PHAssetResourceTypePhoto fileURL:gifURL options:nil];
+                           }
+                           completionHandler:^(BOOL success, NSError *_Nullable error) {
+                             dispatch_async(dispatch_get_main_queue(), ^{
+                               if (success) {
+                                   [DYYYToast showSuccessToastWithMessage:@"已保存到相册"];
+                               } else {
+                                   NSString *errorMsg = error ? error.localizedDescription : @"未知错误";
+                                   [DYYYUtils showToast:[NSString stringWithFormat:@"保存失败: %@", errorMsg]];
+                               }
+                               NSError *removeError = nil;
+                               [[NSFileManager defaultManager] removeItemAtURL:gifURL error:&removeError];
+                               if (removeError) {
+                                   NSLog(@"删除临时转换文件失败: %@", removeError);
+                               }
+                             });
+                           }];
+                     }];
 }
-+ (void)downloadAndShareCommentAudio:(NSString *)audioContent
-                            userName:(NSString *)userName
-                          createTime:(NSNumber *)createTime {
+// ===== 评论区语音下载并分享 =====
+// 语音内容字段是 JSON 字符串：先解析出真实音频 URL（video_list.main_url，
+// 取不到再退 backup_url），下载后用「用户名+评论时间」拼成安全文件名
+// （替换 / \ : 空格等非法字符），最后弹 UIActivityViewController
+// 让用户选择保存位置/转发，面板关闭后清理临时文件。
+// popoverPresentationController 是 iPad 弹窗适配，防止 iPad 上崩溃。
++ (void)downloadAndShareCommentAudio:(NSString *)audioContent userName:(NSString *)userName createTime:(NSNumber *)createTime {
     if (!audioContent || audioContent.length == 0) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            [DYYYUtils showToast:@"语音内容为空"];
+          [DYYYUtils showToast:@"语音内容为空"];
         });
         return;
     }
-    
+
     NSData *jsonData = [audioContent dataUsingEncoding:NSUTF8StringEncoding];
     NSError *error = nil;
     NSDictionary *audioDict = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
-    
+
     if (error || !audioDict) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            [DYYYUtils showToast:@"语音数据解析失败"];
+          [DYYYUtils showToast:@"语音数据解析失败"];
         });
         NSLog(@"[DYYY] 解析语音 JSON 失败: %@", error);
         return;
     }
-    
+
     NSArray *videoList = audioDict[@"video_list"];
     if (!videoList || videoList.count == 0) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            [DYYYUtils showToast:@"未找到语音URL"];
+          [DYYYUtils showToast:@"未找到语音URL"];
         });
         return;
     }
-    
+
     NSDictionary *videoInfo = videoList.firstObject;
     NSString *audioURLString = videoInfo[@"main_url"];
     if (!audioURLString || audioURLString.length == 0) {
         audioURLString = videoInfo[@"backup_url"];
     }
-    
+
     if (!audioURLString || audioURLString.length == 0) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            [DYYYUtils showToast:@"语音URL无效"];
+          [DYYYUtils showToast:@"语音URL无效"];
         });
         return;
     }
-    
+
     NSURL *audioURL = [NSURL URLWithString:audioURLString];
     if (!audioURL) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            [DYYYUtils showToast:@"语音URL格式错误"];
+          [DYYYUtils showToast:@"语音URL格式错误"];
         });
         return;
     }
-    
+
     dispatch_async(dispatch_get_main_queue(), ^{
-        [DYYYUtils showToast:@"正在下载语音..."];
+      [DYYYUtils showToast:@"正在下载语音..."];
     });
-    
+
     NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
     NSURLSession *session = [NSURLSession sessionWithConfiguration:config];
-    
-    NSURLSessionDownloadTask *downloadTask = [session downloadTaskWithURL:audioURL completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
-        if (error) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [DYYYUtils showToast:[NSString stringWithFormat:@"下载失败: %@", error.localizedDescription]];
-            });
-            NSLog(@"[DYYY] 下载语音失败: %@", error);
-            return;
-        }
-        
-        if (!location) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [DYYYUtils showToast:@"下载失败：无效的文件"];
-            });
-            return;
-        }
-        
-        NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-        formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
-        NSTimeInterval timestamp = (createTime && [createTime doubleValue] > 0) ? [createTime doubleValue] : [[NSDate date] timeIntervalSince1970];
-        NSDate *commentDate = [NSDate dateWithTimeIntervalSince1970:timestamp];
-        NSString *timeString = [formatter stringFromDate:commentDate];
-        timeString = [timeString stringByReplacingOccurrencesOfString:@":" withString:@"-"];
-        timeString = [timeString stringByReplacingOccurrencesOfString:@" " withString:@"_"];
-        
-        NSString *safeUserName = userName ?: @"未知用户";
-        safeUserName = [safeUserName stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
-        safeUserName = [safeUserName stringByReplacingOccurrencesOfString:@"\\" withString:@"_"];
-        
-        NSString *fileName = [NSString stringWithFormat:@"%@_%@.m4a", safeUserName, timeString];
-        NSString *tempDir = NSTemporaryDirectory();
-        NSString *targetPath = [tempDir stringByAppendingPathComponent:fileName];
-        
-        NSError *moveError = nil;
-        [[NSFileManager defaultManager] removeItemAtPath:targetPath error:nil];
-        [[NSFileManager defaultManager] moveItemAtPath:location.path toPath:targetPath error:&moveError];
-        
-        if (moveError) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [DYYYUtils showToast:@"文件保存失败"];
-            });
-            NSLog(@"[DYYY] 移动文件失败: %@", moveError);
-            return;
-        }
-        
-        NSURL *fileURL = [NSURL fileURLWithPath:targetPath];
-        
-        dispatch_async(dispatch_get_main_queue(), ^{
-            UIViewController *topVC = [DYYYUtils topView];
-            if (!topVC) {
-                [DYYYUtils showToast:@"无法显示分享界面"];
-                return;
-            }
-            
-            UIActivityViewController *activityVC = [[UIActivityViewController alloc] initWithActivityItems:@[fileURL] applicationActivities:nil];
-            
-            activityVC.completionWithItemsHandler = ^(UIActivityType activityType, BOOL completed, NSArray *returnedItems, NSError *activityError) {
-                [[NSFileManager defaultManager] removeItemAtPath:targetPath error:nil];
-                
-                if (completed) {
-                    [DYYYUtils showToast:@"分享成功"];
-                } else if (activityError) {
-                    [DYYYUtils showToast:@"分享失败"];
-                }
-            };
-            
-            if ([activityVC respondsToSelector:@selector(popoverPresentationController)]) {
-                activityVC.popoverPresentationController.sourceView = topVC.view;
-                activityVC.popoverPresentationController.sourceRect = CGRectMake(topVC.view.bounds.size.width / 2, topVC.view.bounds.size.height / 2, 0, 0);
-            }
-            
-            [topVC presentViewController:activityVC animated:YES completion:nil];
-        });
-    }];
-    
+
+    NSURLSessionDownloadTask *downloadTask = [session downloadTaskWithURL:audioURL
+                                                        completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
+                                                          if (error) {
+                                                              dispatch_async(dispatch_get_main_queue(), ^{
+                                                                [DYYYUtils showToast:[NSString stringWithFormat:@"下载失败: %@", error.localizedDescription]];
+                                                              });
+                                                              NSLog(@"[DYYY] 下载语音失败: %@", error);
+                                                              return;
+                                                          }
+
+                                                          if (!location) {
+                                                              dispatch_async(dispatch_get_main_queue(), ^{
+                                                                [DYYYUtils showToast:@"下载失败：无效的文件"];
+                                                              });
+                                                              return;
+                                                          }
+
+                                                          NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+                                                          formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+                                                          NSTimeInterval timestamp = (createTime && [createTime doubleValue] > 0) ? [createTime doubleValue] : [[NSDate date] timeIntervalSince1970];
+                                                          NSDate *commentDate = [NSDate dateWithTimeIntervalSince1970:timestamp];
+                                                          NSString *timeString = [formatter stringFromDate:commentDate];
+                                                          timeString = [timeString stringByReplacingOccurrencesOfString:@":" withString:@"-"];
+                                                          timeString = [timeString stringByReplacingOccurrencesOfString:@" " withString:@"_"];
+
+                                                          NSString *safeUserName = userName ?: @"未知用户";
+                                                          safeUserName = [safeUserName stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+                                                          safeUserName = [safeUserName stringByReplacingOccurrencesOfString:@"\\" withString:@"_"];
+
+                                                          NSString *fileName = [NSString stringWithFormat:@"%@_%@.m4a", safeUserName, timeString];
+                                                          NSString *tempDir = NSTemporaryDirectory();
+                                                          NSString *targetPath = [tempDir stringByAppendingPathComponent:fileName];
+
+                                                          NSError *moveError = nil;
+                                                          [[NSFileManager defaultManager] removeItemAtPath:targetPath error:nil];
+                                                          [[NSFileManager defaultManager] moveItemAtPath:location.path toPath:targetPath error:&moveError];
+
+                                                          if (moveError) {
+                                                              dispatch_async(dispatch_get_main_queue(), ^{
+                                                                [DYYYUtils showToast:@"文件保存失败"];
+                                                              });
+                                                              NSLog(@"[DYYY] 移动文件失败: %@", moveError);
+                                                              return;
+                                                          }
+
+                                                          NSURL *fileURL = [NSURL fileURLWithPath:targetPath];
+
+                                                          dispatch_async(dispatch_get_main_queue(), ^{
+                                                            UIViewController *topVC = [DYYYUtils topView];
+                                                            if (!topVC) {
+                                                                [DYYYUtils showToast:@"无法显示分享界面"];
+                                                                return;
+                                                            }
+
+                                                            UIActivityViewController *activityVC = [[UIActivityViewController alloc] initWithActivityItems:@[ fileURL ] applicationActivities:nil];
+
+                                                            activityVC.completionWithItemsHandler = ^(UIActivityType activityType, BOOL completed, NSArray *returnedItems, NSError *activityError) {
+                                                              [[NSFileManager defaultManager] removeItemAtPath:targetPath error:nil];
+
+                                                              if (completed) {
+                                                                  [DYYYUtils showToast:@"分享成功"];
+                                                              } else if (activityError) {
+                                                                  [DYYYUtils showToast:@"分享失败"];
+                                                              }
+                                                            };
+
+                                                            if ([activityVC respondsToSelector:@selector(popoverPresentationController)]) {
+                                                                activityVC.popoverPresentationController.sourceView = topVC.view;
+                                                                activityVC.popoverPresentationController.sourceRect =
+                                                                    CGRectMake(topVC.view.bounds.size.width / 2, topVC.view.bounds.size.height / 2, 0, 0);
+                                                            }
+
+                                                            [topVC presentViewController:activityVC animated:YES completion:nil];
+                                                          });
+                                                        }];
+
     [downloadTask resume];
 }
 

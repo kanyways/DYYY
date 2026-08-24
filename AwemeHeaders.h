@@ -125,7 +125,7 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 
 @interface AWEAwemeModel : NSObject
 @property(nonatomic, strong, readwrite) NSNumber *createTime;
-@property(nonatomic, strong, readwrite) NSNumber *recommendShareRate; // 推荐视频专有属性 
+@property(nonatomic, strong, readwrite) NSNumber *recommendShareRate;  // 推荐视频专有属性
 @property(nonatomic, assign, readwrite) CGFloat videoDuration;
 @property(nonatomic, strong) AWEVideoModel *video;
 @property(nonatomic, strong) AWEMusicModel *music;
@@ -145,8 +145,8 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @property(nonatomic, strong) id hotSpotLynxCardModel;
 @property(nonatomic, strong) AWELiveFollowFeedCellModel *cellRoom;
 @property(nonatomic, strong) NSString *videoFeedTag;
-@property(nonatomic, strong) id shareRecExtra;  // 收藏/喜欢以外的视频专有属性
-@property(nonatomic, copy) NSString *referString; // 推荐页为 homepage_hot
+@property(nonatomic, strong) id shareRecExtra;     // 收藏/喜欢以外的视频专有属性
+@property(nonatomic, copy) NSString *referString;  // 推荐页为 homepage_hot
 - (BOOL)dyyy_shouldExcludeFromGlobalHDRFilter;
 - (BOOL)dyyy_containsHDRMetadataInObject:(id)object depth:(NSUInteger)depth;
 @property(nonatomic, strong) NSArray<AWEAwemeTextExtraModel *> *textExtras;
@@ -612,13 +612,13 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 
 @interface AWECommentAudioModel : NSObject
-@property (nonatomic, copy, readwrite) NSString *content;
+@property(nonatomic, copy, readwrite) NSString *content;
 @end
 
 @interface AWECommentModel : NSObject
-@property (nonatomic, strong, readwrite) AWECommentAudioModel *audioModel;
-@property (nonatomic, strong, readwrite) AWEUserModel *author;
-@property (nonatomic, strong, readwrite) NSNumber *createTime;
+@property(nonatomic, strong, readwrite) AWECommentAudioModel *audioModel;
+@property(nonatomic, strong, readwrite) AWEUserModel *author;
+@property(nonatomic, strong, readwrite) NSNumber *createTime;
 - (AWEIMStickerModel *)sticker;
 - (NSString *)content;
 - (NSArray<AWECommentImageModel *> *)imageList;
@@ -1944,7 +1944,7 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 
 // 精选标签
 @interface AWETemplateStaticLabelInfoModel : NSObject
-@property (nonatomic, copy) NSArray *containers;
+@property(nonatomic, copy) NSArray *containers;
 @end
 
 // 好友推荐

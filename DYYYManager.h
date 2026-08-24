@@ -91,9 +91,7 @@
  * @param currentIndex 当前图片索引（-1 表示保存全部）
  * @param completion 完成回调
  */
-+ (void)saveCommentImages:(NSArray *)imageModels
-             currentIndex:(NSInteger)currentIndex
-               completion:(void (^)(NSInteger successCount, NSInteger livePhotoCount, NSInteger failedCount))completion;
++ (void)saveCommentImages:(NSArray *)imageModels currentIndex:(NSInteger)currentIndex completion:(void (^)(NSInteger successCount, NSInteger livePhotoCount, NSInteger failedCount))completion;
 
 /**
  * 下载并分享评论区语音
@@ -101,9 +99,7 @@
  * @param userName 评论者用户名
  * @param createTime 评论创建时间（NSNumber，秒级时间戳）
  */
-+ (void)downloadAndShareCommentAudio:(NSString *)audioContent
-                            userName:(NSString *)userName
-                          createTime:(NSNumber *)createTime;
++ (void)downloadAndShareCommentAudio:(NSString *)audioContent userName:(NSString *)userName createTime:(NSNumber *)createTime;
 /**
  * 批量下载图片
  * @param imageURLs 图片URL数组

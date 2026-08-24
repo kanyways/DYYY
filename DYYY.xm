@@ -29,11 +29,48 @@
 #import "DYYYToast.h"
 #import "DYYYUtils.h"
 
+// =====================================================================
+// DYYY.xm —— 插件主入口（Theos / Logos 工程）
+// ---------------------------------------------------------------------
+// 这是什么：
+//   本文件是 DYYY 插件（抖音增强工具）的"主战场"，集中了绝大多数
+//   runtime hook。它不编译成普通 App 代码，而是由 Logos 预处理器
+//   （logos.pl）转换成 Objective-C 后，再被 Theos 编译成动态库
+//   （.dylib），由越狱环境注入抖音进程。
+//
+// Logos 语法速览（本文件大量使用，新人必读）：
+//   %hook 类名      —— 开始 hook 一个类，之后写的方法会替换原方法
+//   %orig;          —— 调用被替换的原始方法（相当于"原方法在这里执行"）
+//   %orig(参数)     —— 同上，但改写传入原方法的参数
+//   %new            —— 给被 hook 的类新增一个原本不存在的方法
+//   %c(类名)        —— 运行时获取类对象（等价 objc_getClass）
+//   %group 名字      —— 把若干 %hook 打包成一组，默认不生效
+//   %init(组名)     —— 在 %ctor 里按条件启用某一组
+//   %ctor {}        —— 构造函数，插件注入进程时执行一次（类似 +load）
+//
+// 本文件布局（从上到下）：
+//   1. 全局静态变量 + 若干 C 函数（约 1-800 行）
+//   2. "默认组"：56 个直接 %hook，启动即全部生效（约 815-2738 行）
+//   3. 13 个 %group：按功能分组，由设置项/运行时条件决定是否启用
+//      （约 2739-12980 行，详见各分组前的注释）
+//   4. %ctor 初始化区：注册默认设置、按条件 %init 各组（13082 行起）
+//
+// 依赖关系：
+//   本文件只负责"拦截"，具体业务逻辑大量转发给 DYYYManager（核心
+//   管理器）和 DYYYUtils（工具类），改功能优先去那两个文件。
+// =====================================================================
+
 static CGFloat gStartY = 0.0;
 static CGFloat gStartVal = 0.0;
 static DYEdgeMode gMode = DYEdgeModeNone;
+// 当前信息流 CollectionView 的弱引用（weak 防止造成循环引用/野指针）
 static __weak UICollectionView *gFeedCV = nil;
 
+// ---------------------------------------------------------------------
+// 全局透明度系统（底部 TabBar 等处的"全局半透明"功能）
+// kInvalidAlpha = -1.0 是哨兵值（sentinel）：合法透明度是 0.0~1.0，
+// 用 -1 专门标记"用户还没设置过"，这样读取时能区分"未设置"和"透明"
+// ---------------------------------------------------------------------
 static const CGFloat kInvalidAlpha = -1.0;
 static const CGFloat kInvalidHeight = -1.0;
 static CGFloat gGlobalTransparency = kInvalidAlpha;
@@ -41,9 +78,15 @@ static CGFloat gCurrentTabBarHeight = kInvalidHeight;
 static CGFloat originalTabBarHeight = kInvalidHeight;
 static NSString *const kDYYYGlobalTransparencyKey = @"DYYYGlobalTransparency";
 static NSString *const kDYYYGlobalTransparencyDidChangeNotification = @"DYYYGlobalTransparencyDidChangeNotification";
+// 关联对象（associated object）的 key：指针地址本身作为唯一标识
 static char kDYYYGlobalTransparencyBaseAlphaKey;
+// 防重入计数：透明度被递归修改时用，避免无限循环
 static NSInteger dyyyGlobalTransparencyMutationDepth = 0;
 
+// 从 NSUserDefaults 读取透明度设置并刷新内存缓存。
+// 注意：插件里大量"配置 -> 内存缓存"都是这种模式——
+// hook 方法里频繁读 NSUserDefaults 很慢，所以读取一次后
+// 缓存到全局变量，配置变更时再调用本函数刷新。
 static void updateGlobalTransparencyCache() {
     NSString *transparentValue = DYYYGetString(kDYYYGlobalTransparencyKey);
     if (transparentValue.length > 0) {
@@ -810,6 +853,14 @@ static void DYYYHandleCurrentSpeedAwemeChanged(id aweme) {
 }
 
 @end
+
+// ---------------------------------------------------------------------
+// 默认组（default group）从这里开始，一直到 2739 行的
+// %group DYYYCommentExactTimeGroup 为止，共 56 个直接 %hook。
+// 与"命名组"不同，不写 %group 的 %hook 属于隐式 default 组，
+// 插件加载时无条件全部生效。下面都是些零散小功能：
+// 去水印、长按复制、UI 细节调整等，每个 hook 前都有一行中文说明。
+// ---------------------------------------------------------------------
 
 // 关闭不可见水印
 %hook AWEHPChannelInvisibleWaterMarkModel
@@ -2685,6 +2736,11 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 %end
 
 // 评论具体时间
+// 教学点：设置开关 + %orig 参数改写的组合模式
+// DYYYGetBool(@"DYYYCommentExactTime") 读取用户设置（NSUserDefaults 封装）。
+// 关闭时 %orig(timestamp) 原样调用原方法（"转发"）；开启时自己返回
+// 原始时间戳字符串。整个插件里这种"开关短路 + %orig 转发"的模式随处可见：
+// 先判断开关，关 -> 原样转发，开 -> 走插件逻辑。
 %hook AWEDateTimeFormatter
 
 + (id)formattedDateForTimestamp:(double)timestamp {
@@ -2736,6 +2792,10 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 %end
 
+// 组：评论显示"精确发布时间"（代替"x分钟前"）
+// 关键点：Swift 类的 ObjC 名称带点号（"AWECommentSwiftBizUI.Comment
+// InteractionBaseLabel"），Logos 的 %hook 不能直接用点号类名，
+// 所以在 %ctor 里用 objc_getClass 拿到类后映射成下划线别名（见 13095 行）。
 %group DYYYCommentExactTimeGroup
 %hook AWECommentSwiftBizUI_CommentInteractionBaseLabel
 
@@ -3284,6 +3344,10 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 %end
 
+// 组：双指长按打开设置面板
+// hook UIWindow 的 initWithFrame 给每个窗口挂一个双指长按手势，
+// 再用 %new 新增处理方法。这是"手势入口"类功能的典型写法。
+// 本组由设置项 DYYYDisableSettingsGesture 控制是否启用。
 %group DYYYSettingsGesture
 
 %hook UIWindow
@@ -4628,6 +4692,9 @@ static NSArray<NSString *> *dyyy_qualityRank = nil;
 
 %end
 
+// 组：视频自动播放（进入详情页/滑动时自动续播）
+// hook 了详情页控制器和自动播放管理器，把抖音的"手动播放"
+// 改成按设置自动播放。由设置项 DYYYEnableAutoPlay 控制。
 %group AutoPlay
 
 %hook AWEAwemeDetailTableViewController
@@ -4855,6 +4922,10 @@ BOOL commentLivePhotoNotWaterMark = DYYYGetBool(@"DYYYCommentLivePhotoNotWaterMa
 }
 %end
 
+// 组：给表情 / 评论图片 / 评论音频增加"下载/保存"入口
+// 这里声明了组内共享的静态变量（targetStickerView 记录用户
+// 长按选中的表情视图）。组内代码用 %hook 给菜单加按钮。
+// 由 DYYYForceDownloadEmotion 等设置项控制启用。
 %group EnableStickerSaveMenu
 static __weak YYAnimatedImageView *targetStickerView = nil;
 static BOOL dyyyShouldUseLastStickerURL = NO;
@@ -5248,6 +5319,11 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
     return newMenuItems ?: menuItems;
 }
 
+// 组：私信菜单增加"下载"按钮（旧版 API 签名）
+// 下面三个 IMMenu 组 hook 的是同一个类 AWEIMCustomMenuComponent，
+// 区别只在原方法的 selector 签名不同——抖音不同版本改过参数列表。
+// %ctor 里用 class_getInstanceMethod 检测当前版本实际存在哪个
+// selector，再只初始化对应的组（见 13100 行）。这是"多版本兼容"的经典做法。
 %group DYYYIMMenuLegacyGroup
 %hook AWEIMCustomMenuComponent
 - (void)msg_showMenuForBubbleFrameInScreen:(CGRect)bubbleFrame tapLocationInScreen:(CGPoint)tapLocation menuItemList:(NSArray *)menuItems moreEmoticon:(BOOL)moreEmoticon onCell:(id)cell extra:(id)extra {
@@ -5257,6 +5333,7 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 %end
 %end
 
+// 组：私信菜单增加"下载"按钮（带 menuPanelOptions 参数的新版签名）
 %group DYYYIMMenuTapLocationGroup
 %hook AWEIMCustomMenuComponent
 - (void)msg_showMenuForBubbleFrameInScreen:(CGRect)bubbleFrame tapLocationInScreen:(CGPoint)tapLocation menuItemList:(NSArray *)menuItems menuPanelOptions:(unsigned long long)menuPanelOptions moreEmoticon:(BOOL)moreEmoticon onCell:(id)cell extra:(id)extra {
@@ -5266,6 +5343,7 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 %end
 %end
 
+// 组：私信菜单增加"下载"按钮（高/低位置参数的又一种新版签名）
 %group DYYYIMMenuHighLowGroup
 %hook AWEIMCustomMenuComponent
 - (void)msg_showMenuForBubbleFrameInScreen:(CGRect)bubbleFrame highLocationInScreen:(CGPoint)highLocation lowLocationInScreen:(CGPoint)lowLocation tryHighLocationFirst:(BOOL)tryHighLocationFirst menuItemList:(NSArray *)menuItems menuPanelOptions:(unsigned long long)menuPanelOptions onCell:(id)cell extra:(id)extra {
@@ -5953,6 +6031,11 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
 %end
 
 // Swift 类组
+// 组：评论头部通用视图的毛玻璃 / 视觉调整
+// 下面三个 CommentHeader 组 hook 的是"评论头部"不同样式的 Swift 视图
+// （普通 / 商品 / 模板锚点），改的都是 layoutSubviews 布局时机。
+// layoutSubviews 是 UIView 布局的回调点，在这里改 frame/样式，
+// 能保证每次布局变化后我们的调整都生效。
 %group CommentHeaderGeneralGroup
 %hook AWECommentPanelHeaderSwiftImpl_CommentHeaderGeneralView
 - (void)layoutSubviews {
@@ -5964,6 +6047,7 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
 }
 %end
 %end
+// 组：评论头部商品样式视图的视觉调整
 %group CommentHeaderGoodsGroup
 %hook AWECommentPanelHeaderSwiftImpl_CommentHeaderGoodsView
 - (void)layoutSubviews {
@@ -5975,6 +6059,7 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
 }
 %end
 %end
+// 组：评论头部模板锚点视图的视觉调整
 %group CommentHeaderTemplateGroup
 %hook AWECommentPanelHeaderSwiftImpl_CommentHeaderTemplateAnchorView
 - (void)layoutSubviews {
@@ -5986,6 +6071,9 @@ static void DYYYApplyAvatarFollowPromptSettingsWithRetry(id owner) {
 }
 %end
 %end
+// 组：评论区底部提示条的容器控制器
+// 在 viewWillAppear 时机做调整（视图即将出现时），
+// 比 viewDidLoad 晚但能覆盖每次重新进入。
 %group CommentBottomTipsVCGroup
 %hook AWECommentPanelListSwiftImpl_CommentBottomTipsContainerViewController
 - (void)viewWillAppear:(BOOL)animated {
@@ -12978,6 +13066,8 @@ static NSString *const kHideRecentUsersKey = @"DYYYHideSidebarRecentUsers";
 %end
 
 // 极速版红包激励挂件容器视图类组（移除逻辑）
+// 组：红包激励挂件容器视图（评论/直播里的金币激励入口）
+// Swift 类名映射见 %ctor 中 13125 行附近。
 %group IncentivePendantGroup
 %hook AWEIncentiveSwiftImplDOUYINLite_IncentivePendantContainerView
 - (void)layoutSubviews {
@@ -12990,6 +13080,9 @@ static NSString *const kHideRecentUsersKey = @"DYYYHideSidebarRecentUsers";
 %end
 
 // View scaling fix when comment blur is enabled
+// 组：图片多内容视图（拦截 transform 实现缩放/平移增强）
+// setTransform 是所有 UIKit 视图做手势缩放/旋转的统一入口，
+// 在这里 %orig 前后加逻辑可以控制所有图片来源的变换行为。
 %group BDMultiContentImageViewGroup
 %hook BDMultiContentContainer_ImageContentView
 
@@ -13079,6 +13172,20 @@ static void findTargetViewInView(UIView *view) {
     }
 }
 
+// ---------------------------------------------------------------------
+// %ctor —— 插件初始化区（进程注入后最先执行的代码）
+// 这里做三件事：
+//   1. registerDefaults 给所有设置项写入默认值（首次安装即生效）
+//   2. DYYYMigrateCombinedHDRModeIfNeeded 等数据迁移（老版本配置升级）
+//   3. 按"设置开关 + 运行时探测"决定启用哪些 %group：
+//        - 开关型：DYYYDisableSettingsGesture / DYYYEnableAutoPlay 等
+//        - 探测型：objc_getClass 检查 Swift 类是否存在（类名带点号，
+//          %hook 用不了，需先取类再映射成下划线别名传给 %init）
+//        - selector 型：class_getInstanceMethod 检查方法签名，适配
+//          抖音不同版本的 API 差异（见三个 IMMenu 组）
+// 注意：%ctor 里执行的都是轻量检查，绝不在这里做耗时操作，
+// 否则会拖慢抖音启动。
+// ---------------------------------------------------------------------
 %ctor {
     [[NSUserDefaults standardUserDefaults] registerDefaults:@{
         @"DYYYDisableFeedNowPlayingInfo" : @YES

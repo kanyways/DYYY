@@ -80,7 +80,6 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
     if (![defaults objectForKey:@"DYYYSpeedButtonSize"]) {
         [defaults setFloat:32.0 forKey:@"DYYYSpeedButtonSize"];
     }
-
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -741,14 +740,9 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
     if ([item.key isEqualToString:@"DYYYEnableFloatSpeedButton"] || [item.key isEqualToString:@"DYYYSpeedButtonShowX"]) {
         [FloatingSpeedButton reloadConfiguration];
     }
-    if ([item.key isEqualToString:@"DYYYEnableFloatClearButton"] ||
-        [item.key isEqualToString:@"DYYYHideDanmaku"] ||
-        [item.key isEqualToString:@"DYYYRemoveTimeProgress"] ||
-        [item.key isEqualToString:@"DYYYHideTimeProgress"] ||
-        [item.key isEqualToString:@"DYYYHideSlider"] ||
-        [item.key isEqualToString:@"DYYYHideTabBar"] ||
-        [item.key isEqualToString:@"DYYYHideSpeed"] ||
-        [item.key isEqualToString:@"DYYYHideChapter"]) {
+    if ([item.key isEqualToString:@"DYYYEnableFloatClearButton"] || [item.key isEqualToString:@"DYYYHideDanmaku"] || [item.key isEqualToString:@"DYYYRemoveTimeProgress"] ||
+        [item.key isEqualToString:@"DYYYHideTimeProgress"] || [item.key isEqualToString:@"DYYYHideSlider"] || [item.key isEqualToString:@"DYYYHideTabBar"] ||
+        [item.key isEqualToString:@"DYYYHideSpeed"] || [item.key isEqualToString:@"DYYYHideChapter"]) {
         reloadClearButtonConfiguration();
     }
 

@@ -1,14 +1,13 @@
 #import "AWMSafeDispatchTimer.h"
 
-
 static const void *kAWMSafeDispatchTimerSpecificKey = &kAWMSafeDispatchTimerSpecificKey;
 
 @interface AWMSafeDispatchTimer ()
-@property (nonatomic, strong, nullable) dispatch_source_t internalTimer;
-@property (nonatomic, assign) BOOL resumed;
-@property (nonatomic, copy, nullable) dispatch_block_t internalHandler;
-@property (nonatomic, strong) dispatch_queue_t synchronizationQueue;
-@property (nonatomic, assign, getter=isRunning) BOOL running;
+@property(nonatomic, strong, nullable) dispatch_source_t internalTimer;
+@property(nonatomic, assign) BOOL resumed;
+@property(nonatomic, copy, nullable) dispatch_block_t internalHandler;
+@property(nonatomic, strong) dispatch_queue_t synchronizationQueue;
+@property(nonatomic, assign, getter=isRunning) BOOL running;
 @end
 
 @implementation AWMSafeDispatchTimer
@@ -22,11 +21,7 @@ static const void *kAWMSafeDispatchTimerSpecificKey = &kAWMSafeDispatchTimerSpec
     return self;
 }
 
-- (void)startWithInterval:(NSTimeInterval)interval
-                   leeway:(NSTimeInterval)leeway
-                    queue:(dispatch_queue_t)queue
-                 repeats:(BOOL)repeats
-                 handler:(dispatch_block_t)handler {
+- (void)startWithInterval:(NSTimeInterval)interval leeway:(NSTimeInterval)leeway queue:(dispatch_queue_t)queue repeats:(BOOL)repeats handler:(dispatch_block_t)handler {
     if (interval <= 0.0) {
         interval = 0.1;
     }
@@ -91,7 +86,8 @@ static const void *kAWMSafeDispatchTimerSpecificKey = &kAWMSafeDispatchTimerSpec
     self.internalHandler = nil;
     self.internalTimer = nil;
 
-    dispatch_source_set_event_handler(timer, ^{});
+    dispatch_source_set_event_handler(timer, ^{
+                                      });
 
     if (self.resumed) {
         dispatch_source_cancel(timer);

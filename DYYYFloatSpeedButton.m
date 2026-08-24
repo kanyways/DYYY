@@ -1,11 +1,11 @@
-#import "AwemeHeaders.h"
-#import "DYYYFloatClearButton.h"
 #import "DYYYFloatSpeedButton.h"
-#import "DYYYUtils.h"
 #import <UIKit/UIKit.h>
 #import <float.h>
 #import <math.h>
 #import <objc/runtime.h>
+#import "AwemeHeaders.h"
+#import "DYYYFloatClearButton.h"
+#import "DYYYUtils.h"
 
 @class AWEFeedCellViewController;
 
@@ -24,12 +24,12 @@ static void DYYYApplySpeedButtonHiddenState(UIView *button, BOOL hidden) {
         return;
     }
     void (^applyBlock)(UIView *) = ^(UIView *target) {
-        if (!target) {
-            return;
-        }
-        if (target.hidden != hidden) {
-            target.hidden = hidden;
-        }
+      if (!target) {
+          return;
+      }
+      if (target.hidden != hidden) {
+          target.hidden = hidden;
+      }
     };
 
     if ([NSThread isMainThread]) {
@@ -37,7 +37,7 @@ static void DYYYApplySpeedButtonHiddenState(UIView *button, BOOL hidden) {
     } else {
         __weak UIView *weakButton = button;
         dispatch_async(dispatch_get_main_queue(), ^{
-            applyBlock(weakButton);
+          applyBlock(weakButton);
         });
     }
 }
@@ -136,17 +136,14 @@ static BOOL DYYYSpeedOptionsContainSpeed(NSArray<NSString *> *speedOptions, doub
 static BOOL DYYYSpeedOptionsCoverRequiredPlaybackSpeeds(NSArray<NSString *> *speedOptions) {
     double defaultSpeed = DYYYSpeedPreferenceValue(@"DYYYDefaultSpeed", 1.0);
     double longPressSpeed = DYYYSpeedPreferenceValue(@"DYYYLongPressSpeed", 2.0);
-    return DYYYSpeedOptionsContainSpeed(speedOptions, defaultSpeed) &&
-           DYYYSpeedOptionsContainSpeed(speedOptions, longPressSpeed);
+    return DYYYSpeedOptionsContainSpeed(speedOptions, defaultSpeed) && DYYYSpeedOptionsContainSpeed(speedOptions, longPressSpeed);
 }
 
 BOOL DYYYNormalizeSpeedSettingsForRequiredSpeeds(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     NSString *speedConfig = DYYYSpeedSettingsStringFromValue([defaults objectForKey:@"DYYYSpeedSettings"]);
     NSArray<NSString *> *validSpeeds = DYYYParsedSpeedOptionsFromString(speedConfig ?: @"");
-    BOOL shouldUseDefaultSettings = speedConfig.length == 0 ||
-                                    validSpeeds.count == 0 ||
-                                    !DYYYSpeedOptionsCoverRequiredPlaybackSpeeds(validSpeeds);
+    BOOL shouldUseDefaultSettings = speedConfig.length == 0 || validSpeeds.count == 0 || !DYYYSpeedOptionsCoverRequiredPlaybackSpeeds(validSpeeds);
 
     if (!shouldUseDefaultSettings) {
         return NO;
@@ -259,7 +256,9 @@ void updateSpeedButtonUI() {
     }
 }
 
-FloatingSpeedButton *getSpeedButton(void) { return speedButton; }
+FloatingSpeedButton *getSpeedButton(void) {
+    return speedButton;
+}
 
 NSArray *findViewControllersInHierarchy(UIViewController *rootViewController) {
     if (!rootViewController) {

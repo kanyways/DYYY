@@ -187,10 +187,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  * 使用 YYImage 解码动图数据，返回帧图像和总时长
  */
-+ (BOOL)framesFromAnimatedData:(NSData *)data
-                         scale:(CGFloat)scale
-                        images:(NSArray<UIImage *> *_Nullable *)images
-                 totalDuration:(CGFloat *_Nullable)totalDuration;
++ (BOOL)framesFromAnimatedData:(NSData *)data scale:(CGFloat)scale images:(NSArray<UIImage *> *_Nullable *)images totalDuration:(CGFloat *_Nullable)totalDuration;
 
 /**
  * 根据帧数组生成 GIF 文件
@@ -215,16 +212,12 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  * 下载音频并合并到视频
  */
-+ (void)downloadAudioAndMergeWithVideo:(NSURL *)videoURL
-                              audioURL:(NSURL *)audioURL
-                            completion:(void (^)(BOOL success, NSURL *mergedURL))completion;
++ (void)downloadAudioAndMergeWithVideo:(NSURL *)videoURL audioURL:(NSURL *)audioURL completion:(void (^)(BOOL success, NSURL *mergedURL))completion;
 
 /**
  * 合并视频和音频
  */
-+ (void)mergeVideo:(NSURL *)videoURL
-         withAudio:(NSURL *)audioURL
-        completion:(void (^)(BOOL success, NSURL *mergedURL))completion;
++ (void)mergeVideo:(NSURL *)videoURL withAudio:(NSURL *)audioURL completion:(void (^)(BOOL success, NSURL *mergedURL))completion;
 
 /**
  * 将 WebP 转换为 GIF
