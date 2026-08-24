@@ -1347,6 +1347,22 @@ static void DYYYMigrateCombinedHDRModeIfNeeded(void) {
     });
 }
 
+// 迁移：通知毛玻璃改用独立透明度键后，老用户设置过"毛玻璃透明度"
+// （DYYYCommentBlurTransparent）的值原本会同时作用于通知栏，
+// 升级后通知透明度会静默回落默认 0.5。这里一次性把旧值复制到新键。
+static void DYYYMigrateNotificationBlurTransparencyIfNeeded(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        if ([defaults objectForKey:@"DYYYNotificationBlurTransparent"] == nil) {
+            id oldValue = [defaults objectForKey:@"DYYYCommentBlurTransparent"];
+            if (oldValue) {
+                [defaults setObject:oldValue forKey:@"DYYYNotificationBlurTransparent"];
+            }
+        }
+    });
+}
+
 static BOOL DYYYShouldDisableAllHDR(void) {
     return [[[NSUserDefaults standardUserDefaults] stringForKey:kDYYYHDRModeKey] isEqualToString:kDYYYHDRModeDisable];
 }
@@ -3452,11 +3468,13 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
     // 类名失效兜底：抖音改版重命名 Swift 类后 NSClassFromString 返回 nil，
     // isKindOfClass 恒为 NO，毛玻璃会"静默消失"且没有任何日志。
     // 这里只在首次检测到失效时打一条日志，方便排查升级后毛玻璃突然没了的问题。
+    // 注意：评论面板模块可能懒加载，首次调用时类未注册也属正常，
+    // 所以文案提示的是"可能"失效，最终以毛玻璃实际效果为准。
     if (!commentContainerClass) {
         static BOOL s_warnedOnce = NO;
         if (!s_warnedOnce) {
             s_warnedOnce = YES;
-            NSLog(@"[DYYY] 警告：CommentContainerInnerViewController 类不存在，评论区毛玻璃可能失效，请检查抖音版本兼容性");
+            NSLog(@"[DYYY] 提示：CommentContainerInnerViewController 类尚未加载（可能懒加载或抖音已改名），若评论区毛玻璃未生效请检查抖音版本兼容性");
         }
         return;
     }
@@ -11504,7 +11522,10 @@ static Class tabBarButtonClass = nil;
 - (void)layoutSubviews {
     %orig;
 
-    if (DYYYGetBool(@"DYYYEnableFullScreen")) {
+    // 与 setBackgroundColor 全屏分支保持一致的毛玻璃豁免：
+    // 毛玻璃开启时背景透明由毛玻璃链路统一管理，这里跳过，
+    // 避免清掉毛玻璃可采样的内容（全屏+毛玻璃同开场景）。
+    if (DYYYGetBool(@"DYYYEnableFullScreen") && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
         if (self.frame.size.height == originalTabBarHeight && originalTabBarHeight > 0) {
             UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
             if ([vc isKindOfClass:NSClassFromString(@"AWEMixVideoPanelDetailTableViewController")] || [vc isKindOfClass:NSClassFromString(@"AWECommentInputViewController")] ||
@@ -13248,6 +13269,7 @@ static void findTargetViewInView(UIView *view) {
     }];
 
     DYYYMigrateCombinedHDRModeIfNeeded();
+    DYYYMigrateNotificationBlurTransparencyIfNeeded();
 
     Class interactionBaseLabelClass = objc_getClass("AWECommentSwiftBizUI.CommentInteractionBaseLabel");
     if (interactionBaseLabelClass) {
