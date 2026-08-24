@@ -5,3 +5,4 @@ Aweme
 Makefile.local
 headers
 .vscode/
+.codegraph
