@@ -82,6 +82,32 @@ static NSMutableDictionary<NSString *, id> *s_settingsCache = nil;
 //    多个线程同时第一次调用也不会重复执行，适合惰性创建单例/队列。
 // 2. 串行队列 + dispatch_async：写文件是磁盘 IO，不该阻塞调用线程（可能正跑在
 //    主线程上）；所有日志丢进同一个串行队列，写入互不交错、顺序不乱。
+// GeoNames 磁盘缓存上限清理：缓存按城市码一城一个 plist 且只增不删，
+// 长期使用会积累无界文件。在写入后顺带调用：超过上限时按修改时间
+// 删除最旧的，直到回到上限内。可在任意线程执行（纯文件操作）。
+static const NSInteger kDYYYGeoNamesDiskCacheLimit = 200;
+static void DYYYTrimGeoNamesDiskCache(void) {
+    NSString *cachesDir = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject];
+    NSString *geoNamesCacheDir = [cachesDir stringByAppendingPathComponent:@"DYYYGeoNamesCache"];
+    NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:geoNamesCacheDir error:nil];
+    if (files.count <= kDYYYGeoNamesDiskCacheLimit) {
+        return;
+    }
+    NSMutableArray *entries = [NSMutableArray array];
+    for (NSString *name in files) {
+        NSString *path = [geoNamesCacheDir stringByAppendingPathComponent:name];
+        NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+        [entries addObject:@{@"path" : path, @"date" : attrs[NSFileModificationDate] ?: [NSDate distantPast]}];
+    }
+    // 新的在前，只保留最新的 200 个
+    [entries sortUsingComparator:^NSComparisonResult(id a, id b) {
+      return [b[@"date"] compare:a[@"date"]];
+    }];
+    for (NSInteger i = kDYYYGeoNamesDiskCacheLimit; i < (NSInteger)entries.count; i++) {
+        [[NSFileManager defaultManager] removeItemAtPath:entries[i][@"path"] error:nil];
+    }
+}
+
 static NSString *DYYYRuntimeLogFilePath(void) {
     static NSString *logPath = nil;
     static dispatch_once_t onceToken;
@@ -488,6 +514,10 @@ static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
     return [[self fastSettingValueForKey:key] boolValue];
 }
 
++ (CGFloat)fastFloatForKey:(NSString *)key {
+    return [[self fastSettingValueForKey:key] floatValue];
+}
+
 + (NSString *)fastStringForKey:(NSString *)key {
     return [self fastSettingValueForKey:key];
 }
@@ -841,6 +871,8 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
                                             NSString *geoNamesCacheDir = [cachesDir stringByAppendingPathComponent:@"DYYYGeoNamesCache"];
                                             NSString *cacheFilePath = [geoNamesCacheDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.plist", cacheKey]];
                                             [locationInfo writeToFile:cacheFilePath atomically:YES];
+                                            // 磁盘缓存只增不删，写入后顺带做上限清理
+                                            DYYYTrimGeoNamesDiskCache();
                                         }
                                     }
 

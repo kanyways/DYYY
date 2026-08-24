@@ -591,7 +591,14 @@ void updateSpeedButtonVisibility() {
     if (self.statusCheckTimer && [self.statusCheckTimer isValid]) {
         return;
     }
-    NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:60.0 target:self selector:@selector(checkAndRecoverButtonStatus) userInfo:nil repeats:YES];
+    // block 版定时器不 retain target，配合 __weak 打破
+    // "self 持有 timer / timer 持有 self" 的循环引用。
+    // 原 selector 版 target:self 在按钮常驻 keyWindow 时形成有界泄漏
+    // （self 永不释放，dealloc 永远不执行）。
+    __weak typeof(self) weakSelf = self;
+    NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:60.0 repeats:YES block:^(NSTimer *_Nonnull t) {
+        [weakSelf checkAndRecoverButtonStatus];
+    }];
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
     self.statusCheckTimer = timer;
 }

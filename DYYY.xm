@@ -4782,8 +4782,10 @@ static NSArray<NSString *> *dyyy_qualityRank = nil;
 
 %hook AWEPlayInteractionSpeedController
 
+// 长按倍速手势状态。注意这是进程级 static（而非实例变量）——
+// 这是设计意图：手势中的速度要全局生效（UILabel 显示、其它播放器
+// 的 setRate 都要读到），所以刻意共享，不能改成实例关联对象。
 static CGFloat currentLongPressSpeed = 0;
-static CGFloat initialTouchX = 0;
 static BOOL isGestureActive = NO;
 
 - (CGFloat)longPressFastSpeedValue {
@@ -11972,12 +11974,14 @@ static Class tabBarButtonClass = nil;
 - (void)layoutSubviews {
     %orig;
 
-    if (DYYYGetBool(@"DYYYEnableFullScreen")) {
+    if ([DYYYUtils fastBoolForKey:@"DYYYEnableFullScreen"]) {
         CGRect frame = self.frame;
         frame.size.height = self.superview.frame.size.height;
         self.frame = frame;
     } else if (gCurrentTabBarHeight > 0) {
-        UIWindow *keyWindow = [DYYYUtils getActiveWindow];
+        // 用 self.window 替代 getActiveWindow：布局回调时视图已在窗口上，
+        // 自己的 window 就是活跃窗口，省掉遍历 connectedScenes/windows 的开销
+        UIWindow *keyWindow = self.window;
         if (keyWindow && keyWindow.safeAreaInsets.bottom == 0) {
             return;
         }
@@ -12310,17 +12314,17 @@ static Class TagViewClass = nil;
     UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:self];
 
     if ([viewController isKindOfClass:%c(AWELiveNewPreStreamViewController)]) {
-        const BOOL shouldShiftUp = DYYYGetBool(@"DYYYEnableFullScreen");
-        const CGFloat labelScaleValue = DYYYGetFloat(@"DYYYNicknameScale");
+        const BOOL shouldShiftUp = [DYYYUtils fastBoolForKey:@"DYYYEnableFullScreen"];
+        const CGFloat labelScaleValue = [DYYYUtils fastFloatForKey:@"DYYYNicknameScale"];
         const CGFloat targetLabelScale = (labelScaleValue != 0.0) ? MAX(0.01, labelScaleValue) : 1.0;
-        const CGFloat elementScaleValue = DYYYGetFloat(@"DYYYElementScale");
+        const CGFloat elementScaleValue = [DYYYUtils fastFloatForKey:@"DYYYElementScale"];
         const CGFloat targetElementScale = (elementScaleValue != 0.0) ? MAX(0.01, elementScaleValue) : 1.0;
 
         CGAffineTransform targetTransform = CGAffineTransformIdentity;
         CGFloat boundsWidth = self.bounds.size.width;
         CGFloat currentScale = 1.0;
         CGFloat targetHeight, tx, ty = 0;
-        UIWindow *keyWindow = [DYYYUtils getActiveWindow];
+        UIWindow *keyWindow = self.window;
         if (keyWindow && keyWindow.safeAreaInsets.bottom == 0) {
             targetHeight = gCurrentTabBarHeight - originalTabBarHeight;
         } else {
@@ -12524,17 +12528,17 @@ static Class TagViewClass = nil;
     UIViewController *viewController = [DYYYUtils firstAvailableViewControllerFromView:self];
 
     if ([viewController isKindOfClass:%c(AWELiveNewPreStreamViewController)]) {
-        const BOOL shouldShiftUp = DYYYGetBool(@"DYYYEnableFullScreen");
-        const CGFloat labelScaleValue = DYYYGetFloat(@"DYYYNicknameScale");
+        const BOOL shouldShiftUp = [DYYYUtils fastBoolForKey:@"DYYYEnableFullScreen"];
+        const CGFloat labelScaleValue = [DYYYUtils fastFloatForKey:@"DYYYNicknameScale"];
         const CGFloat targetLabelScale = (labelScaleValue != 0.0) ? MAX(0.01, labelScaleValue) : 1.0;
-        const CGFloat elementScaleValue = DYYYGetFloat(@"DYYYElementScale");
+        const CGFloat elementScaleValue = [DYYYUtils fastFloatForKey:@"DYYYElementScale"];
         const CGFloat targetElementScale = (elementScaleValue != 0.0) ? MAX(0.01, elementScaleValue) : 1.0;
 
         CGAffineTransform targetTransform = CGAffineTransformIdentity;
         CGFloat boundsWidth = self.bounds.size.width;
         CGFloat currentScale = 1.0;
         CGFloat targetHeight, tx, ty = 0;
-        UIWindow *keyWindow = [DYYYUtils getActiveWindow];
+        UIWindow *keyWindow = self.window;
         if (keyWindow && keyWindow.safeAreaInsets.bottom == 0) {
             targetHeight = gCurrentTabBarHeight - originalTabBarHeight;
         } else {

@@ -19,6 +19,9 @@ NS_ASSUME_NONNULL_BEGIN
 /** 带内存缓存的字符串读取（同上）。 */
 + (NSString *)fastStringForKey:(NSString *)key;
 
+/** 带内存缓存的浮点读取（同上）。 */
++ (CGFloat)fastFloatForKey:(NSString *)key;
+
 /** 清空设置缓存：设置面板写入后必须调用，否则修改不生效。 */
 + (void)invalidateSettingsCache;
 

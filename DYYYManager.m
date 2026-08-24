@@ -527,7 +527,10 @@
                                          [[NSFileManager defaultManager] removeItemAtURL:fileURL error:nil];
                                        });
                                      }];
-                                     UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+                                     // keyWindow 在 iOS 13+ 多场景下已废弃，可能返回 nil
+                                     // （音频分享面板静默不弹出的原因），改用插件统一的
+                                     // getActiveWindow 回退链（connectedScenes -> windows）。
+                                     UIViewController *rootVC = [DYYYUtils getActiveWindow].rootViewController;
                                      [rootVC presentViewController:activityVC animated:YES completion:nil];
                                      notifyCompletion(YES);
                                    });
