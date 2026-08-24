@@ -65,6 +65,14 @@
 static const void *kLabelColorStateKey = &kLabelColorStateKey;
 static const NSTimeInterval kDYYYUtilsDefaultFrameDelay = 0.1f;
 
+// ==== 设置读取缓存（性能） ====
+// 热路径 hook（setFrame / setBackgroundColor / CALayer 家族等每帧被调用
+// 几十万次）不能直接读 NSUserDefaults——每次都是消息发送 + 哈希查找。
+// 这里只对"设置面板才写入、运行时几乎不变"的 key 做内存缓存；
+// 失效时机有两个：NSUserDefaultsDidChangeNotification（跨进程同步），
+// 以及 DYYYSettingsHelper.setUserDefaults（面板写入）显式清缓存。
+static NSMutableDictionary<NSString *, id> *s_settingsCache = nil;
+
 // ==== 日志区块 ====
 // DYYYNSLog 是插件自己的日志函数：一条日志同时发给 os_log（macOS 的 Console.app
 // 或 Xcode 里可见）、stderr（越狱环境下 ssh 进设备即可看到），
@@ -447,6 +455,42 @@ static BOOL DYYYUtilsWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
 @implementation DYYYUtils
 
 static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
+
+#pragma mark - 设置读取缓存（热路径性能）
+
+// 缓存失效：面板写入走 setUserDefaults，由 SettingsHelper 调 invalidate；
+// 跨进程同步走 NSUserDefaultsDidChangeNotification。
++ (void)invalidateSettingsCache {
+    s_settingsCache = nil;
+}
+
++ (id)fastSettingValueForKey:(NSString *)key {
+    if (!s_settingsCache) {
+        s_settingsCache = [NSMutableDictionary dictionary];
+        [[NSNotificationCenter defaultCenter] addObserverForName:NSUserDefaultsDidChangeNotification
+                                                          object:nil
+                                                           queue:nil
+                                                      usingBlock:^(NSNotification *_Nonnull note) {
+                                                        s_settingsCache = nil;
+                                                      }];
+    }
+    id cached = s_settingsCache[key];
+    if (cached) {
+        return (cached == (id)[NSNull null]) ? nil : cached;
+    }
+    id value = [[NSUserDefaults standardUserDefaults] objectForKey:key];
+    // 用 NSNull 占位"未设置"，避免每次未命中都重新查 defaults
+    s_settingsCache[key] = value ?: [NSNull null];
+    return value;
+}
+
++ (BOOL)fastBoolForKey:(NSString *)key {
+    return [[self fastSettingValueForKey:key] boolValue];
+}
+
++ (NSString *)fastStringForKey:(NSString *)key {
+    return [self fastSettingValueForKey:key];
+}
 
 // ==== 功能区块一：模型过滤（去广告的核心判断） ====
 // 抖音的列表数据模型（AWEAwemeModel 等）来自宿主 App 的私有类，本文件顶部只

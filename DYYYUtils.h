@@ -11,6 +11,17 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface DYYYUtils : NSObject
 
+#pragma mark - 设置读取缓存（热路径性能）
+
+/** 带内存缓存的 bool 读取：只用于"设置面板才写入、运行时几乎不变"的热路径 key。 */
++ (BOOL)fastBoolForKey:(NSString *)key;
+
+/** 带内存缓存的字符串读取（同上）。 */
++ (NSString *)fastStringForKey:(NSString *)key;
+
+/** 清空设置缓存：设置面板写入后必须调用，否则修改不生效。 */
++ (void)invalidateSettingsCache;
+
 #pragma mark - Public Model Filtering Utilities (公共模型过滤工具)
 
 /** 使用抖音模型自身的广告判定及明确广告字段识别广告作品。 */

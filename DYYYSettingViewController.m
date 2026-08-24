@@ -4,6 +4,7 @@
 #import "DYYYConstants.h"
 #import "DYYYFloatClearButton.h"
 #import "DYYYFloatSpeedButton.h"
+#import "DYYYUtils.h"
 
 typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYYYSettingItemTypeTextField, DYYYSettingItemTypePicker };
 
@@ -704,6 +705,8 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
                                                        handler:^(UIAlertAction *_Nonnull action) {
                                                          // 保存到对应的key
                                                          [[NSUserDefaults standardUserDefaults] setObject:option forKey:item.key];
+                                                         // 设置面板写入需失效热路径缓存，否则修改不即时生效
+                                                         [DYYYUtils invalidateSettingsCache];
 
                                                          // 更新对应的cell显示
                                                          UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
@@ -737,6 +740,8 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
     DYYYSettingItem *item = self.settingSections[indexPath.section][indexPath.row];
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults setBool:sender.isOn forKey:item.key];
+    // 设置面板写入需失效热路径缓存，否则修改不即时生效
+    [DYYYUtils invalidateSettingsCache];
     if ([item.key isEqualToString:@"DYYYEnableFloatSpeedButton"] || [item.key isEqualToString:@"DYYYSpeedButtonShowX"]) {
         [FloatingSpeedButton reloadConfiguration];
     }
@@ -756,6 +761,7 @@ typedef NS_ENUM(NSInteger, DYYYSettingItemType) { DYYYSettingItemTypeSwitch, DYY
 
         if (conflictingKey) {
             [defaults setBool:NO forKey:conflictingKey];
+            [DYYYUtils invalidateSettingsCache];
             [self.tableView reloadData];
         }
     }

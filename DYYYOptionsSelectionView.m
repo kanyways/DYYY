@@ -180,6 +180,8 @@ static void DYYYApplySelectionSheetThemeToView(UIView *view, BOOL darkMode) {
 
           NSString *selectedValue = [currentModel title];
           [[NSUserDefaults standardUserDefaults] setObject:selectedValue forKey:preferenceKey];
+          // 选项选择器可能改写热路径缓存 key（如透明度类），一并失效缓存
+          [DYYYUtils invalidateSettingsCache];
 
           if (callback) {
               callback(selectedValue);

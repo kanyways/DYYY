@@ -18,6 +18,9 @@
 // 设置用户默认设置
 + (void)setUserDefaults:(id)object forKey:(NSString *)key {
     [[NSUserDefaults standardUserDefaults] setObject:object forKey:key];
+    // 设置面板是热路径缓存（DYYYUtils fastBoolForKey 等）的唯一写入来源，
+    // 必须清缓存，否则修改不会即时生效。
+    [DYYYUtils invalidateSettingsCache];
 }
 
 // 显示自定义关于弹窗

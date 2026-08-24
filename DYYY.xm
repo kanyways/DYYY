@@ -1364,11 +1364,12 @@ static void DYYYMigrateNotificationBlurTransparencyIfNeeded(void) {
 }
 
 static BOOL DYYYShouldDisableAllHDR(void) {
-    return [[[NSUserDefaults standardUserDefaults] stringForKey:kDYYYHDRModeKey] isEqualToString:kDYYYHDRModeDisable];
+    // 热路径（UIImageView setImage / CALayer 等每帧调用）用缓存读取
+    return [[DYYYUtils fastStringForKey:kDYYYHDRModeKey] isEqualToString:kDYYYHDRModeDisable];
 }
 
 static BOOL DYYYShouldFilterGlobalHDR(void) {
-    return [[[NSUserDefaults standardUserDefaults] stringForKey:kDYYYHDRModeKey] isEqualToString:kDYYYHDRModeFilter];
+    return [[DYYYUtils fastStringForKey:kDYYYHDRModeKey] isEqualToString:kDYYYHDRModeFilter];
 }
 
 static id DYYYKVCValueIfPossible(id object, NSString *key) {
@@ -5442,7 +5443,8 @@ static char kDYYYAvatarActionChromeLayerKey;
 static char kDYYYAvatarSurroundingHiddenViewKey;
 
 static BOOL DYYYAvatarFollowOptionsEnabled(void) {
-    return DYYYGetBool(@"DYYYHideLOTAnimationView") || DYYYGetBool(@"DYYYHideFollowPromptView");
+    // 热路径（CALayer 家族/头像 hooks 每帧调用）用缓存读取
+    return [DYYYUtils fastBoolForKey:@"DYYYHideLOTAnimationView"] || [DYYYUtils fastBoolForKey:@"DYYYHideFollowPromptView"];
 }
 
 static BOOL DYYYShouldForceHideAvatarActionLayer(CALayer *layer) {
@@ -5549,7 +5551,7 @@ static void DYYYMarkAvatarSurroundingViewHidden(UIView *view) {
 }
 
 static BOOL DYYYShouldForceAvatarSurroundingViewHidden(UIView *view) {
-    return view && objc_getAssociatedObject(view, &kDYYYAvatarSurroundingHiddenViewKey) && DYYYGetBool(@"DYYYHideAvatarButton");
+    return view && objc_getAssociatedObject(view, &kDYYYAvatarSurroundingHiddenViewKey) && [DYYYUtils fastBoolForKey:@"DYYYHideAvatarButton"];
 }
 
 static void DYYYHideAvatarSurroundingVisualForSelector(id object, SEL selector) {
@@ -10879,8 +10881,8 @@ static Class tabBarButtonClass = nil;
     }
 
     // 背景和分隔线处理
-    BOOL hideBottomBg = DYYYGetBool(@"DYYYHideBottomBg");
-    BOOL enableFullScreen = DYYYGetBool(@"DYYYEnableFullScreen");
+    BOOL hideBottomBg = [DYYYUtils fastBoolForKey:@"DYYYHideBottomBg"];
+    BOOL enableFullScreen = [DYYYUtils fastBoolForKey:@"DYYYEnableFullScreen"];
 
     if (hideBottomBg || enableFullScreen) {
         if (self.skinContainerView) {
@@ -11263,7 +11265,7 @@ static Class tabBarButtonClass = nil;
 - (void)layoutSubviews {
     %orig;
 
-    if (DYYYGetBool(@"DYYYEnableFullScreen") && gCurrentTabBarHeight > 0) {
+    if ([DYYYUtils fastBoolForKey:@"DYYYEnableFullScreen"] && gCurrentTabBarHeight > 0) {
         for (UIView *subview in self.subviews) {
             CGRect frame = subview.frame;
             frame.origin.y -= gCurrentTabBarHeight;
@@ -11515,7 +11517,7 @@ static Class tabBarButtonClass = nil;
     // 注意：评论区毛玻璃开启时这里必须跳过——毛玻璃链路（applyBlurEffectToView）
     // 自己管理背景透明，若此处再清空详情页视图背景，毛玻璃可采样的内容会
     // 被清掉，看起来像"完全没模糊"（全屏+毛玻璃同开的场景）。
-    if (DYYYGetBool(@"DYYYEnableFullScreen") && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
+    if ([DYYYUtils fastBoolForKey:@"DYYYEnableFullScreen"] && ![DYYYUtils fastBoolForKey:@"DYYYEnableCommentBlur"]) {
         UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
         if ([vc isKindOfClass:%c(AWEAwemeDetailTableViewController)] ||
             [vc isKindOfClass:%c(AWEAwemeDetailCellViewController)]) {
@@ -11533,7 +11535,7 @@ static Class tabBarButtonClass = nil;
     // 与 setBackgroundColor 全屏分支保持一致的毛玻璃豁免：
     // 毛玻璃开启时背景透明由毛玻璃链路统一管理，这里跳过，
     // 避免清掉毛玻璃可采样的内容（全屏+毛玻璃同开场景）。
-    if (DYYYGetBool(@"DYYYEnableFullScreen") && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
+    if ([DYYYUtils fastBoolForKey:@"DYYYEnableFullScreen"] && ![DYYYUtils fastBoolForKey:@"DYYYEnableCommentBlur"]) {
         if (self.frame.size.height == originalTabBarHeight && originalTabBarHeight > 0) {
             UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
             if ([vc isKindOfClass:NSClassFromString(@"AWEMixVideoPanelDetailTableViewController")] || [vc isKindOfClass:NSClassFromString(@"AWECommentInputViewController")] ||
@@ -11543,7 +11545,7 @@ static Class tabBarButtonClass = nil;
         }
     }
 
-    if (DYYYGetBool(@"DYYYEnableFullScreen") || DYYYGetBool(@"DYYYEnableCommentBlur")) {
+    if ([DYYYUtils fastBoolForKey:@"DYYYEnableFullScreen"] || [DYYYUtils fastBoolForKey:@"DYYYEnableCommentBlur"]) {
         UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
         if ([vc isKindOfClass:%c(AWEPlayInteractionViewController)]) {
             for (UIView *subview in self.subviews) {
@@ -11563,8 +11565,15 @@ static Class tabBarButtonClass = nil;
         return;
     }
 
-    BOOL enableBlur = DYYYGetBool(@"DYYYEnableCommentBlur");
-    BOOL enableFS = DYYYGetBool(@"DYYYEnableFullScreen");
+    BOOL enableBlur = [DYYYUtils fastBoolForKey:@"DYYYEnableCommentBlur"];
+    BOOL enableFS = [DYYYUtils fastBoolForKey:@"DYYYEnableFullScreen"];
+
+    // 两个特性全关时短路：跳过 responder 链遍历与 NSClassFromString 查找，
+    // 直接透传——setFrame 是滚动时调用频率最高的方法之一，省掉整段开销。
+    if (!enableBlur && !enableFS) {
+        %orig(frame);
+        return;
+    }
 
     UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
     Class DetailVCClass = NSClassFromString(@"AWEMixVideoPanelDetailTableViewController");
@@ -11891,7 +11900,7 @@ static Class tabBarButtonClass = nil;
 
 - (void)viewDidLayoutSubviews {
     %orig;
-    if (DYYYGetBool(@"DYYYEnableFullScreen")) {
+    if ([DYYYUtils fastBoolForKey:@"DYYYEnableFullScreen"]) {
         UIView *contentView = self.contentView;
         if (contentView && contentView.superview) {
             CGRect frame = contentView.frame;
