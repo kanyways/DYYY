@@ -4917,7 +4917,11 @@ static BOOL isGestureActive = NO;
         }
 
         if ([text containsString:@"2"]) {
-            text = [text stringByReplacingOccurrencesOfString:@"2" withString:speedString];
+            // 原实现把所有 "2" 字符替换成速度文本："2.0" 会变成 "1.5.0"。
+            // 改为正则只匹配"独立的 2 或 2.xx 数字"（如宿主显示的 "2" / "2.0"），
+            // 替换为实际速度，避免破坏数字格式。
+            NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"2(\\.\\d+)?" options:0 error:nil];
+            text = [regex stringByReplacingMatchesInString:text options:0 range:NSMakeRange(0, text.length) withTemplate:speedString];
         }
     }
 
@@ -10241,7 +10245,11 @@ static NSHashTable *processedParentViews = nil;
     if (isPopupEnabled) {
         AWEAwemeModel *awemeModel = nil;
 
-        awemeModel = [self performSelector:@selector(awemeModel)];
+        // 宿主改版可能移除 awemeModel 方法，裸 performSelector 会抛
+        // unrecognized selector 崩溃；先 respondsToSelector 探测再调用。
+        if ([self respondsToSelector:@selector(awemeModel)]) {
+            awemeModel = [self performSelector:@selector(awemeModel)];
+        }
 
         AWEVideoModel *videoModel = awemeModel.video;
         AWEMusicModel *musicModel = awemeModel.music;
@@ -11614,10 +11622,18 @@ static Class tabBarButtonClass = nil;
                 finalAlpha = clampedAlpha * gGlobalTransparency;
             }
             if (fabs(self.alpha - finalAlpha) >= 0.01) {
+                // 深度计数保护 setAlpha hook 的二次相乘（setAlpha 钩子里
+                // 检查 depth > 0 时跳过再乘 gGlobalTransparency）。
+                // 递减必须放在 completion 而非 animations 里：animations
+                // block 虽然当前是同步执行，但一旦改成异步/带 delay 的
+                // 调用，depth 在 self.alpha 赋值后立即归零，动画期间的
+                // setAlpha 会把 finalAlpha 再乘一次，透明度被平方变暗。
                 [UIView animateWithDuration:0.2
                                  animations:^{
                                    dyyyGlobalTransparencyMutationDepth++;
                                    self.alpha = finalAlpha;
+                                 }
+                                 completion:^(BOOL finished) {
                                    if (dyyyGlobalTransparencyMutationDepth > 0) {
                                        dyyyGlobalTransparencyMutationDepth--;
                                    }

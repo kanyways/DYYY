@@ -1174,13 +1174,12 @@
                             }
                             completionHandler:^(BOOL success, NSError *_Nullable error) {
                               dispatch_async(dispatch_get_main_queue(), ^{
-                                if (success) {
-                                    // 删除临时文件
-                                    [[NSFileManager defaultManager] removeItemAtPath:imageSourcePath error:nil];
-                                    [[NSFileManager defaultManager] removeItemAtPath:videoSourcePath error:nil];
-                                    [[NSFileManager defaultManager] removeItemAtPath:photoFile error:nil];
-                                    [[NSFileManager defaultManager] removeItemAtPath:videoFile error:nil];
-                                }
+                                // 无论成功失败都清理四个临时文件：失败路径若不删，
+                                // 每次失败在 /tmp 残留 4 个文件（系统不会自动清理）。
+                                [[NSFileManager defaultManager] removeItemAtPath:imageSourcePath error:nil];
+                                [[NSFileManager defaultManager] removeItemAtPath:videoSourcePath error:nil];
+                                [[NSFileManager defaultManager] removeItemAtPath:photoFile error:nil];
+                                [[NSFileManager defaultManager] removeItemAtPath:videoFile error:nil];
                               });
                             }];
                       }];
@@ -1208,18 +1207,32 @@
 - (void)finishWritingTracksWithPhoto:(NSString *)photoFile video:(NSString *)videoFile complete:(void (^)(BOOL success, NSString *photoFile, NSString *videoFile, NSError *error))complete {
     [DYYYManager.shared->reader cancelReading];
     [DYYYManager.shared->writer finishWritingWithCompletionHandler:^{
+      // 任务结束清理共享 ivar，防止陈旧状态影响下一次保存
+      DYYYManager.shared->reader = nil;
+      DYYYManager.shared->writer = nil;
+      DYYYManager.shared->queue = nil;
+      DYYYManager.shared->group = nil;
       if (complete)
           complete(YES, photoFile, videoFile, nil);
     }];
 }
 - (void)addMetadataToPhoto:(NSURL *)photoURL outputFile:(NSString *)outputFile identifier:(NSString *)identifier {
     NSMutableData *data = [NSData dataWithContentsOfURL:photoURL].mutableCopy;
+    // 源文件不可读时 data 为 nil：CGImageDestinationCreateWithData 传 NULL
+    // 有崩溃风险，writeToFile 对 nil 也会静默失败，提前返回更安全。
+    if (!data) {
+        return;
+    }
     UIImage *image = [UIImage imageWithData:data];
     CGImageRef imageRef = image.CGImage;
     NSDictionary *imageMetadata = @{(NSString *)kCGImagePropertyMakerAppleDictionary : @{@"17" : identifier}};
     CGImageDestinationRef dest = CGImageDestinationCreateWithData((CFMutableDataRef)data, kUTTypeJPEG, 1, nil);
-    CGImageDestinationAddImage(dest, imageRef, (CFDictionaryRef)imageMetadata);
-    CGImageDestinationFinalize(dest);
+    if (dest) {
+        CGImageDestinationAddImage(dest, imageRef, (CFDictionaryRef)imageMetadata);
+        CGImageDestinationFinalize(dest);
+        // CoreFoundation 对象需手动释放，否则每张实况照片泄漏一个 CF 对象
+        CFRelease(dest);
+    }
     [data writeToFile:outputFile atomically:YES];
 }
 
@@ -1230,6 +1243,14 @@
 // finishWritingTracksWithPhoto 协作使用——同一时刻只能跑一个任务；
 // 批量场景改用 addMetadataToVideoWithLocalVars（局部变量版）规避竞态。
 - (void)addMetadataToVideo:(NSURL *)videoURL outputFile:(NSString *)outputFile identifier:(NSString *)identifier {
+    // 每个新任务开始时清空共享 ivar：若上次任务在中途失败（reader/writer
+    // 创建失败提前 return），group/reader/writer 仍是旧值，本次调用会在
+    // 1202 行对陈旧 group 挂 notify、对陈旧 writer 二次 finishWriting——
+    // 造成跨任务错乱。清空后失败 return 也会保持干净状态。
+    DYYYManager.shared->reader = nil;
+    DYYYManager.shared->writer = nil;
+    DYYYManager.shared->queue = nil;
+    DYYYManager.shared->group = nil;
     NSError *error = nil;
     AVAsset *asset = [AVAsset assetWithURL:videoURL];
     AVAssetReader *reader = [AVAssetReader assetReaderWithAsset:asset error:&error];
