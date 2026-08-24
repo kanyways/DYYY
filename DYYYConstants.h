@@ -21,4 +21,8 @@
 #define DYYYGeonamesErrorDomain @"com.dyyy.geonames.api.error"
 #define DYYYGeonamesStatusUserInfoKey @"com.dyyy.geonames.api.status"
 
+// 弹幕分支加的白底视图专用 tag（去重用）。
+// 避开 999（毛玻璃）与 9999（弹窗毛玻璃），防止互相误认。
+#define kDYYYDanmuWhiteBackgroundTag 998
+
 #endif

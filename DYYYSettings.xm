@@ -1558,6 +1558,11 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
             @"detail" : @"0-1小数",
             @"cellType" : @26,
             @"imageName" : @"ic_eye_outlined_20"},
+          @{@"identifier" : @"DYYYNotificationBlurTransparent",
+            @"title" : @"通知毛玻璃透明度",
+            @"detail" : @"0-1小数",
+            @"cellType" : @26,
+            @"imageName" : @"ic_eye_outlined_20"},
       ];
 
       for (NSDictionary *dict in transparencySettings) {

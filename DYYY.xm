@@ -3445,7 +3445,23 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 %new
 - (void)applyBlurEffectIfNeeded {
-    if (DYYYGetBool(@"DYYYEnableCommentBlur") && [self isKindOfClass:NSClassFromString(@"AWECommentPanelContainerSwiftImpl.CommentContainerInnerViewController")]) {
+    if (!DYYYGetBool(@"DYYYEnableCommentBlur"))
+        return;
+
+    Class commentContainerClass = NSClassFromString(@"AWECommentPanelContainerSwiftImpl.CommentContainerInnerViewController");
+    // 类名失效兜底：抖音改版重命名 Swift 类后 NSClassFromString 返回 nil，
+    // isKindOfClass 恒为 NO，毛玻璃会"静默消失"且没有任何日志。
+    // 这里只在首次检测到失效时打一条日志，方便排查升级后毛玻璃突然没了的问题。
+    if (!commentContainerClass) {
+        static BOOL s_warnedOnce = NO;
+        if (!s_warnedOnce) {
+            s_warnedOnce = YES;
+            NSLog(@"[DYYY] 警告：CommentContainerInnerViewController 类不存在，评论区毛玻璃可能失效，请检查抖音版本兼容性");
+        }
+        return;
+    }
+
+    if ([self isKindOfClass:commentContainerClass]) {
         // 动态获取用户设置的透明度
         float userTransparency = [[[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYCommentBlurTransparent"] floatValue];
         if (userTransparency <= 0 || userTransparency > 1) {
@@ -4289,7 +4305,10 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
       blurView.layer.cornerRadius = userRadius;
       blurView.layer.masksToBounds = YES;
 
-      float userTransparency = [[[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYCommentBlurTransparent"] floatValue];
+      // 通知毛玻璃用独立透明度键（DYYYNotificationBlurTransparent），
+      // 不再复用评论区的 DYYYCommentBlurTransparent——否则调评论区
+      // 透明度会连动通知栏，两个功能无法分别调节。
+      float userTransparency = [[[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNotificationBlurTransparent"] floatValue];
       if (userTransparency <= 0 || userTransparency > 1) {
           userTransparency = 0.5;
       }
@@ -4322,7 +4341,10 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
 %new
 - (void)clearBackgroundRecursivelyInView:(UIView *)view {
     for (UIView *subview in view.subviews) {
-        if ([subview isKindOfClass:[UIVisualEffectView class]] && subview.tag == 999 && [subview isKindOfClass:[UIButton class]]) {
+        // 跳过插件自己添加的毛玻璃视图（tag 999），不清它的背景。
+        // 原代码多了一个 [subview isKindOfClass:[UIButton class]] 条件：
+        // UIVisualEffectView 不可能是 UIButton，该条件恒为假，属于死代码，已删除。
+        if ([subview isKindOfClass:[UIVisualEffectView class]] && subview.tag == 999) {
             continue;
         }
         subview.backgroundColor = [UIColor clearColor];
@@ -11275,6 +11297,14 @@ static Class tabBarButtonClass = nil;
 }
 
 - (void)viewDidLayoutSubviews {
+    // 与 setFrame/setBackgroundColor 等 hook 保持一致的线程防护：
+    // 非主线程的布局回调先转发到主线程，避免直接操作 UIKit 视图树。
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [self viewDidLayoutSubviews];
+        });
+        return;
+    }
     %orig;
 
     if (!DYYYGetBool(@"DYYYEnableCommentBlur"))
@@ -11309,14 +11339,35 @@ static Class tabBarButtonClass = nil;
             UIView *parentView = middleContainer.superview;
             for (UIView *innerSubview in parentView.subviews) {
                 if ([innerSubview isKindOfClass:[UIView class]]) {
-                    if (innerSubview.subviews.count > 0) {
-                        innerSubview.subviews[0].hidden = YES;
+                    // 隐藏弹幕底下的背景视图。原来直接取 subviews[0]，
+                    // 顺序敏感（可能误伤输入框/白底自身）；改为跳过我们
+                    // 添加的白底视图（tag 998），只隐藏其它第一个子视图。
+                    UIView *firstNonWhiteBg = nil;
+                    for (UIView *sub in innerSubview.subviews) {
+                        if (sub.tag != kDYYYDanmuWhiteBackgroundTag) {
+                            firstNonWhiteBg = sub;
+                            break;
+                        }
                     }
+                    firstNonWhiteBg.hidden = YES;
 
-                    UIView *whiteBackgroundView = [[UIView alloc] initWithFrame:innerSubview.bounds];
-                    whiteBackgroundView.backgroundColor = [UIColor whiteColor];
-                    whiteBackgroundView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-                    [innerSubview addSubview:whiteBackgroundView];
+                    // 白底视图去重：viewDidLayoutSubviews 会反复回调，
+                    // 若每次无脑 addSubview 会无限叠加视图并触发新一轮
+                    // 布局（布局风暴）。用固定 tag 标记，已存在则复用。
+                    BOOL hasWhiteBackground = NO;
+                    for (UIView *sub in innerSubview.subviews) {
+                        if (sub.tag == kDYYYDanmuWhiteBackgroundTag) {
+                            hasWhiteBackground = YES;
+                            break;
+                        }
+                    }
+                    if (!hasWhiteBackground) {
+                        UIView *whiteBackgroundView = [[UIView alloc] initWithFrame:innerSubview.bounds];
+                        whiteBackgroundView.backgroundColor = [UIColor whiteColor];
+                        whiteBackgroundView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                        whiteBackgroundView.tag = kDYYYDanmuWhiteBackgroundTag;
+                        [innerSubview addSubview:whiteBackgroundView];
+                    }
                     break;
                 }
             }
@@ -11434,7 +11485,11 @@ static Class tabBarButtonClass = nil;
         return;
     }
 
-    if (DYYYGetBool(@"DYYYEnableFullScreen")) {
+    // 全屏时把详情页背景清透明，让视频透出。
+    // 注意：评论区毛玻璃开启时这里必须跳过——毛玻璃链路（applyBlurEffectToView）
+    // 自己管理背景透明，若此处再清空详情页视图背景，毛玻璃可采样的内容会
+    // 被清掉，看起来像"完全没模糊"（全屏+毛玻璃同开的场景）。
+    if (DYYYGetBool(@"DYYYEnableFullScreen") && !DYYYGetBool(@"DYYYEnableCommentBlur")) {
         UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
         if ([vc isKindOfClass:%c(AWEAwemeDetailTableViewController)] ||
             [vc isKindOfClass:%c(AWEAwemeDetailCellViewController)]) {
