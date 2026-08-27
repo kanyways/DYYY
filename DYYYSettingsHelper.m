@@ -93,7 +93,10 @@
 
           // ===== 互斥激活配置 =====
           // 当源设置项关闭时，目标设置项才能激活
-          @"mutualExclusions" : @{@"DYYYDanmuRainbowRotating" : @[ @"DYYYDanmuColor" ], @"DYYYEnableRandomGradient" : @[ @"DYYYLabelColor", @"DYYYEnableRainbowArea" ], @"DYYYEnableRainbowArea" : @[ @"DYYYLabelColor", @"DYYYEnableRandomGradient" ], @"DYYYSkipPhoto" : @[ @"DYYYSkipPhotoText" ]},
+          // 【属地互斥注意】互斥必须单向：高优先级项（彩虹属地）关闭低优先级项（标签颜色/随机渐变），
+          // 反向禁止！！否则两个开关都曾为 ON 时（历史存储双 ON）会互相置灰、三项全部不可点死锁。
+          // B（VexCove）里彩虹不参与互斥，这里是 A 的增强，务必保持单向。
+          @"mutualExclusions" : @{@"DYYYDanmuRainbowRotating" : @[ @"DYYYDanmuColor" ], @"DYYYEnableRandomGradient" : @[ @"DYYYLabelColor" ], @"DYYYEnableRainbowArea" : @[ @"DYYYLabelColor", @"DYYYEnableRandomGradient" ], @"DYYYSkipPhoto" : @[ @"DYYYSkipPhotoText" ]},
 
           // ===== 值依赖配置 =====
           // 基于字符串值的依赖关系
@@ -332,6 +335,36 @@ static NSArray *allSettingsViewControllers(void) {
     item.isEnable = enableState;
 }
 
+/// 【互斥存储归一化】幂等：互斥虽然是单向的（高优先级项开启 → 落库关闭低优先级项），
+/// 但历史版本（ee81f8d 引入的双向互斥）可能已造成"随机渐变/彩虹属地双 ON"的脏存储，
+/// 在该状态下两项互相置灰且都无法点击，死锁。设置页构建时在此把脏状态纠正为
+/// "彩虹属地 > 属地随机渐变 > 属地标签颜色"的优先级，只落库互斥目标（开关类），
+/// 颜色等详情值保持不动。
++ (void)normalizeMutualExclusionDefaults {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSDictionary *mutualExclusions = [self settingsDependencyConfig][@"mutualExclusions"];
+
+    // 激活优先级从高到低（高优先级项的互斥目标一定会降到低优先级）
+    NSArray<NSString *> *activationOrder = @[ @"DYYYEnableRainbowArea", @"DYYYEnableRandomGradient", @"DYYYDanmuRainbowRotating" ];
+    for (NSString *source in activationOrder) {
+        if (![defaults boolForKey:source]) {
+            continue;
+        }
+        NSArray *targets = mutualExclusions[source];
+        if (![targets isKindOfClass:[NSArray class]]) {
+            continue;
+        }
+        for (NSString *target in targets) {
+            // 只清理"开关类"互斥目标（存储为 NSNumber）；颜色/文本等详情值
+            // （如 DYYYLabelColor 十六进制字符串）不能写成 NO
+            id stored = [defaults objectForKey:target];
+            if ([stored isKindOfClass:[NSNumber class]] && [stored boolValue]) {
+                [self setUserDefaults:@NO forKey:target];
+            }
+        }
+    }
+}
+
 + (void)handleConflictsAndDependenciesForSetting:(NSString *)identifier isEnabled:(BOOL)isEnabled {
     NSDictionary *conflicts = [self settingsDependencyConfig][@"conflicts"];
     NSDictionary *synchronizations = [self settingsDependencyConfig][@"synchronizations"];
@@ -475,6 +508,8 @@ static NSArray *allSettingsViewControllers(void) {
     item.cellType = [dict[@"cellType"] integerValue];
     item.colorStyle = 0;
     item.isEnable = YES;
+    // 先归一再计算：互斥若有历史脏存储(双 ON)需先落库为单向优先级，后续 enable/开关状态才正确
+    [self normalizeMutualExclusionDefaults];
     item.isSwitchOn = [self getUserDefaults:item.identifier];
 
     [self applyDependencyRulesForItem:item];
