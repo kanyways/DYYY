@@ -93,7 +93,7 @@
 
           // ===== 互斥激活配置 =====
           // 当源设置项关闭时，目标设置项才能激活
-          @"mutualExclusions" : @{@"DYYYDanmuRainbowRotating" : @[ @"DYYYDanmuColor" ], @"DYYYEnableRandomGradient" : @[ @"DYYYLabelColor" ], @"DYYYSkipPhoto" : @[ @"DYYYSkipPhotoText" ]},
+          @"mutualExclusions" : @{@"DYYYDanmuRainbowRotating" : @[ @"DYYYDanmuColor" ], @"DYYYEnableRandomGradient" : @[ @"DYYYLabelColor", @"DYYYEnableRainbowArea" ], @"DYYYEnableRainbowArea" : @[ @"DYYYLabelColor", @"DYYYEnableRandomGradient" ], @"DYYYSkipPhoto" : @[ @"DYYYSkipPhotoText" ]},
 
           // ===== 值依赖配置 =====
           // 基于字符串值的依赖关系
@@ -512,6 +512,9 @@ static NSArray *allSettingsViewControllers(void) {
               strongItem.isSwitchOn = isSwitchOn;
               [self setUserDefaults:@(isSwitchOn) forKey:strongItem.identifier];
               [self handleConflictsAndDependenciesForSetting:strongItem.identifier isEnabled:isSwitchOn];
+              // 切换后刷新一次 cell：互斥/依赖变化（如彩虹属地标签与属地随机渐变/属地标签颜色互斥）
+              // 需要立即反映到行上——被禁用的行置灰，放开的行恢复可点。
+              [strongItem refreshCell];
           }
         };
     }

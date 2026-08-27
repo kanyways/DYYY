@@ -1089,6 +1089,14 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
               @"detail" : @"",
               @"cellType" : @37,
               @"imageName" : @"ic_location_outlined_20"
+          },
+          @{
+              @"identifier" : @"DYYYEnableRainbowArea",
+              @"title" : @"彩虹属地标签",
+              @"subTitle" : @"启用后将覆盖上面的属地标签颜色与随机渐变，色彩如旋转彩虹弹幕般轮换",
+              @"detail" : @"",
+              @"cellType" : @37,
+              @"imageName" : @"ic_location_outlined_20"
           }
       ];
 

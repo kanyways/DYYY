@@ -3788,6 +3788,11 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
     if (DYYYGetBool(@"DYYYEnableRandomGradient")) {
         labelColorHex = @"random_gradient";
     }
+    // 【彩虹属地标签】与"旋转彩虹弹幕"同款配色引擎，开启后覆盖上面的属地标签颜色/随机渐变
+    //（设置页里已做互斥，这里再兜底一种优先级）。
+    if (DYYYGetBool(@"DYYYEnableRainbowArea")) {
+        labelColorHex = @"rainbow_rotating";
+    }
 
     BOOL boldEnabled = DYYYGetBool(@"DYYYBoldTimestamp");
     if (boldEnabled && label.font) {
