@@ -3862,6 +3862,99 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
 
       [speedButtonItems addObject:buttonSizeItem];
 
+      // 固定按钮贴边
+      AWESettingItemModel *speedStickToEdgeItem = [[%c(AWESettingItemModel) alloc] init];
+      speedStickToEdgeItem.identifier = @"DYYYSpeedButtonStickToEdge";
+      speedStickToEdgeItem.title = @"固定按钮贴边";
+      speedStickToEdgeItem.detail = @"";
+      speedStickToEdgeItem.type = 1000;
+      speedStickToEdgeItem.svgIconImageName = @"ic_speed_outlined_20";
+      speedStickToEdgeItem.cellType = 6;
+      speedStickToEdgeItem.colorStyle = 0;
+      speedStickToEdgeItem.isEnable = YES;
+      speedStickToEdgeItem.isSwitchOn = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYSpeedButtonStickToEdge"];
+      speedStickToEdgeItem.switchChangedBlock = ^{
+        BOOL newValue = !speedStickToEdgeItem.isSwitchOn;
+        speedStickToEdgeItem.isSwitchOn = newValue;
+        [[NSUserDefaults standardUserDefaults] setBool:newValue forKey:@"DYYYSpeedButtonStickToEdge"];
+        [FloatingSpeedButton reloadConfiguration];
+      };
+      [speedButtonItems addObject:speedStickToEdgeItem];
+
+      // 自动隐藏快捷倍速按钮
+      AWESettingItemModel *autoHideSpeedButtonItem = [[%c(AWESettingItemModel) alloc] init];
+      autoHideSpeedButtonItem.identifier = @"DYYYAutoHideSpeedButton";
+      autoHideSpeedButtonItem.title = @"自动隐藏快捷倍速按钮";
+      autoHideSpeedButtonItem.detail = @"";
+      autoHideSpeedButtonItem.type = 1000;
+      autoHideSpeedButtonItem.svgIconImageName = @"ic_eyeslash_outlined_16";
+      autoHideSpeedButtonItem.cellType = 6;
+      autoHideSpeedButtonItem.colorStyle = 0;
+      autoHideSpeedButtonItem.isEnable = YES;
+      autoHideSpeedButtonItem.isSwitchOn = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYAutoHideSpeedButton"];
+      autoHideSpeedButtonItem.switchChangedBlock = ^{
+        BOOL newValue = !autoHideSpeedButtonItem.isSwitchOn;
+        autoHideSpeedButtonItem.isSwitchOn = newValue;
+        [[NSUserDefaults standardUserDefaults] setBool:newValue forKey:@"DYYYAutoHideSpeedButton"];
+        [FloatingSpeedButton reloadConfiguration];
+      };
+      [speedButtonItems addObject:autoHideSpeedButtonItem];
+
+      // 隐藏快捷倍速按钮时间
+      AWESettingItemModel *autoHideSpeedButtonTimeItem = [[%c(AWESettingItemModel) alloc] init];
+      autoHideSpeedButtonTimeItem.identifier = @"DYYYAutoHideSpeedButtonTime";
+      autoHideSpeedButtonTimeItem.title = @"隐藏快捷倍速按钮时间";
+      CGFloat savedAutoHideInterval = [[NSUserDefaults standardUserDefaults] floatForKey:@"DYYYAutoHideSpeedButtonTime"];
+      if (savedAutoHideInterval <= 0) {
+          savedAutoHideInterval = 30;
+      }
+      autoHideSpeedButtonTimeItem.detail = [NSString stringWithFormat:@"%.0f", savedAutoHideInterval];
+      autoHideSpeedButtonTimeItem.type = 0;
+      autoHideSpeedButtonTimeItem.svgIconImageName = @"ic_clock_outlined_20";
+      autoHideSpeedButtonTimeItem.cellType = 26;
+      autoHideSpeedButtonTimeItem.colorStyle = 0;
+      autoHideSpeedButtonTimeItem.isEnable = YES;
+      autoHideSpeedButtonTimeItem.cellTappedBlock = ^{
+        NSString *currentValue = autoHideSpeedButtonTimeItem.detail ?: @"30";
+        [DYYYSettingsHelper showTextInputAlert:@"设置自动隐藏时间"
+                                   defaultText:currentValue
+                                   placeholder:@"请输入大于0的秒数"
+                                     onConfirm:^(NSString *text) {
+                                       double interval = [text doubleValue];
+                                       if (interval > 0) {
+                                           [[NSUserDefaults standardUserDefaults] setFloat:interval forKey:@"DYYYAutoHideSpeedButtonTime"];
+                                           autoHideSpeedButtonTimeItem.detail = [NSString stringWithFormat:@"%.0f", interval];
+                                           [autoHideSpeedButtonTimeItem refreshCell];
+                                           [FloatingSpeedButton reloadConfiguration];
+                                       } else {
+                                           [DYYYUtils showToast:@"请输入大于0的有效数值"];
+                                       }
+                                     }
+                                      onCancel:nil];
+      };
+      [speedButtonItems addObject:autoHideSpeedButtonTimeItem];
+
+      // 重置按钮位置
+      AWESettingItemModel *resetSpeedButtonPositionItem = [[%c(AWESettingItemModel) alloc] init];
+      resetSpeedButtonPositionItem.identifier = @"DYYYResetSpeedButtonPosition";
+      resetSpeedButtonPositionItem.title = @"重置按钮位置";
+      resetSpeedButtonPositionItem.detail = @"";
+      resetSpeedButtonPositionItem.type = 0;
+      resetSpeedButtonPositionItem.svgIconImageName = @"ic_switch_outlined";
+      resetSpeedButtonPositionItem.cellType = 26;
+      resetSpeedButtonPositionItem.colorStyle = 0;
+      resetSpeedButtonPositionItem.isEnable = YES;
+      resetSpeedButtonPositionItem.cellTappedBlock = ^{
+        if (speedButton) {
+            [speedButton resetToDefaultPosition];
+        } else {
+            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"DYYYSpeedButtonCenterXPercent"];
+            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"DYYYSpeedButtonCenterYPercent"];
+        }
+        [DYYYUtils showToast:@"已重置按钮位置"];
+      };
+      [speedButtonItems addObject:resetSpeedButtonPositionItem];
+
       [speedButtonItems addObject:speedSettingsItem];
 
       NSMutableArray<AWESettingItemModel *> *speedDependentItems = [NSMutableArray array];
@@ -3936,6 +4029,46 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
                                       onCancel:nil];
       };
       [clearButtonItems addObject:clearButtonSizeItem];
+
+      // 固定按钮贴边
+      AWESettingItemModel *clearStickToEdgeItem = [[%c(AWESettingItemModel) alloc] init];
+      clearStickToEdgeItem.identifier = @"DYYYClearButtonStickToEdge";
+      clearStickToEdgeItem.title = @"固定按钮贴边";
+      clearStickToEdgeItem.detail = @"";
+      clearStickToEdgeItem.type = 1000;
+      clearStickToEdgeItem.svgIconImageName = @"ic_eyeslash_outlined_16";
+      clearStickToEdgeItem.cellType = 6;
+      clearStickToEdgeItem.colorStyle = 0;
+      clearStickToEdgeItem.isEnable = YES;
+      clearStickToEdgeItem.isSwitchOn = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYClearButtonStickToEdge"];
+      clearStickToEdgeItem.switchChangedBlock = ^{
+        BOOL newValue = !clearStickToEdgeItem.isSwitchOn;
+        clearStickToEdgeItem.isSwitchOn = newValue;
+        [[NSUserDefaults standardUserDefaults] setBool:newValue forKey:@"DYYYClearButtonStickToEdge"];
+        reloadClearButtonConfiguration();
+      };
+      [clearButtonItems addObject:clearStickToEdgeItem];
+
+      // 重置按钮位置
+      AWESettingItemModel *resetClearButtonPositionItem = [[%c(AWESettingItemModel) alloc] init];
+      resetClearButtonPositionItem.identifier = @"DYYYResetClearButtonPosition";
+      resetClearButtonPositionItem.title = @"重置按钮位置";
+      resetClearButtonPositionItem.detail = @"";
+      resetClearButtonPositionItem.type = 0;
+      resetClearButtonPositionItem.svgIconImageName = @"ic_switch_outlined";
+      resetClearButtonPositionItem.cellType = 26;
+      resetClearButtonPositionItem.colorStyle = 0;
+      resetClearButtonPositionItem.isEnable = YES;
+      resetClearButtonPositionItem.cellTappedBlock = ^{
+        if (hideButton) {
+            [hideButton resetToDefaultPosition];
+        } else {
+            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"DYYYHideButtonCenterXPercent"];
+            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"DYYYHideButtonCenterYPercent"];
+        }
+        [DYYYUtils showToast:@"已重置按钮位置"];
+      };
+      [clearButtonItems addObject:resetClearButtonPositionItem];
 
       // 添加清屏按钮自定义图标选项
       AWESettingItemModel *clearButtonIcon = [DYYYSettingsHelper createIconCustomizationItemWithIdentifier:@"DYYYClearButtonIcon"
