@@ -2895,11 +2895,26 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
     if (font) {
         CGFloat expectedWidth = ceilf([text sizeWithAttributes:@{NSFontAttributeName: font}].width);
         CGRect currentFrame = label.frame;
-        
+
+        // 【A 修复】扩充宽度时必须给行尾"归属地/分享"留位：完整日期时间会让行溢出，
+        // 后者被顶到右侧分享按钮底下遮挡。超预算时改由 adjustsFontSizeToFitWidth
+        // 让时间文本自适应缩小（内容不裁剪），而非继续向右侵占。
+        CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
+        CGFloat reservedRight = 120.0; // 行尾 IP属地 + 分享 预留
+        CGFloat budgetWidth = screenWidth - CGRectGetMinX(currentFrame) - reservedRight;
+        CGFloat targetWidth = expectedWidth;
+        if (budgetWidth > 0) {
+            targetWidth = MIN(expectedWidth, budgetWidth);
+        }
+
         // 如果当前宽度不够，并且不是尚未初始化的状态（>0），则强行修改并重新赋值
-        if (currentFrame.size.width < expectedWidth && currentFrame.size.width > 0) {
-            currentFrame.size.width = expectedWidth;
-            label.frame = currentFrame; 
+        if (currentFrame.size.width < targetWidth && currentFrame.size.width > 0) {
+            currentFrame.size.width = targetWidth;
+            label.frame = currentFrame;
+            if (targetWidth < expectedWidth) {
+                label.adjustsFontSizeToFitWidth = YES;
+                label.minimumScaleFactor = 0.55;
+            }
             label.clipsToBounds = NO;
         }
     }
@@ -2925,8 +2940,20 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
             UIFont *font = label.font;
             if (font) {
                 CGFloat expectedWidth = ceilf([text sizeWithAttributes:@{NSFontAttributeName: font}].width);
-                if (frame.size.width < expectedWidth && frame.size.width > 0) {
-                    frame.size.width = expectedWidth;
+                // 【A 修复】同 setText：加宽不越过"归属地/分享"预留区，超出由自适应缩小兜底
+                CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
+                CGFloat reservedRight = 120.0;
+                CGFloat budgetWidth = screenWidth - frame.origin.x - reservedRight;
+                CGFloat targetWidth = expectedWidth;
+                if (budgetWidth > 0) {
+                    targetWidth = MIN(expectedWidth, budgetWidth);
+                }
+                if (frame.size.width < targetWidth && frame.size.width > 0) {
+                    frame.size.width = targetWidth;
+                    if (targetWidth < expectedWidth && [label respondsToSelector:@selector(setAdjustsFontSizeToFitWidth:)]) {
+                        label.adjustsFontSizeToFitWidth = YES;
+                        label.minimumScaleFactor = 0.55;
+                    }
                     label.clipsToBounds = NO;
                 }
             }
