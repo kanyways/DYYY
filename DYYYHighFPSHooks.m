@@ -190,7 +190,15 @@ static void DYYYInstallCFBundleProMotionHookIfNeeded(void) {
     if (!atomic_compare_exchange_strong(&gDYYYCFBundleHookInstalled, &expected, true)) {
         return;
     }
-    MSHookFunction((void *)CFBundleGetValueForInfoDictionaryKey, (void *)DYYYCFBundleGetValueForInfoDictionaryKey, (void **)&gOrigCFBundleGetValueForInfoDictionaryKey);
+    // BISECT-1: 临时禁用 MSHookFunction —— 怀疑其对 CF 函数页的补丁使该页
+    // 上相邻函数（__CFBasicHashReplaceValue @0xc6610 / _CFXNotificationRegistrarAddName
+    // @0xc68e4）首条指令执行即 SIGBUS 0x32（5 份 .ips 故障地址全部落在该页）。
+    // 验证通过后再恢复或替换实现。
+    if (0) {
+        MSHookFunction((void *)CFBundleGetValueForInfoDictionaryKey, (void *)DYYYCFBundleGetValueForInfoDictionaryKey, (void **)&gOrigCFBundleGetValueForInfoDictionaryKey);
+    } else {
+        gOrigCFBundleGetValueForInfoDictionaryKey = NULL;
+    }
 }
 
 #pragma mark - AWEDisplayLinkDegradeManager
