@@ -2851,7 +2851,10 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
         
         NSDate *date = [NSDate dateWithTimeIntervalSince1970:ts];
         NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-        [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+        // 【A 修复】格式收紧为 "MM-dd HH:mm"（去年去秒）：完整年份+秒（19 字符）会把
+        // 行尾"分享"按钮顶到贴脸/叠影（用户反馈"分享盖住"）。该宽度接近原生"x分钟前"
+        // 的宽度，行内布局不再被推挤；年份/秒在评论区上下文中没有区分度。
+        [formatter setDateFormat:@"MM-dd HH:mm"];
         NSString *formattedDate = [formatter stringFromDate:date];
         
         NSString *newText = [NSString stringWithFormat:@"%@%@", formattedDate, suffix];
@@ -2992,7 +2995,10 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
         
         NSDate *date = [NSDate dateWithTimeIntervalSince1970:ts];
         NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-        [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+        // 【A 修复】格式收紧为 "MM-dd HH:mm"（去年去秒）：完整年份+秒（19 字符）会把
+        // 行尾"分享"按钮顶到贴脸/叠影（用户反馈"分享盖住"）。该宽度接近原生"x分钟前"
+        // 的宽度，行内布局不再被推挤；年份/秒在评论区上下文中没有区分度。
+        [formatter setDateFormat:@"MM-dd HH:mm"];
         NSString *formattedDate = [formatter stringFromDate:date];
         
         NSMutableAttributedString *newAttrStr = [attributedText mutableCopy];
