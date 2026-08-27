@@ -14077,8 +14077,14 @@ static void DYYYHideDouYinSelectAppGuideViews(id owner) {
     DYYYMigrateScaleAndSizeSettingsIfNeeded();
     DYYYMigrateScaleAndSizeSettingsV2IfNeeded();
 
-    // VexCove-DYYY 同步：性能高帧率模块（B 的 LoaderSafe 相位，与用户协议无关）
-    DYYYStartHighFPSHooks();
+    // VexCove-DYYY 同步：性能高帧率模块（B 的 LoaderSafe 相位，与用户协议无关）。
+    // 注意：不能在 %ctor（dyld 初始化阶段）直调——iOS 15.4.1 上
+    // addObserverForName: 会惰性初始化 NSProcessInfo thermal 状态通知，
+    // 在 CF 未就绪时注册观察者会把通知缓冲写崩（EXC_BAD_ACCESS/SIGBUS），
+    // 必须等主 RunLoop 启动后再执行。
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+      DYYYStartHighFPSHooks();
+    });
 
     Class interactionBaseLabelClass = objc_getClass("AWECommentSwiftBizUI.CommentInteractionBaseLabel");
     if (interactionBaseLabelClass) {
@@ -14105,10 +14111,13 @@ static void DYYYHideDouYinSelectAppGuideViews(id owner) {
         %init(DYYYSettingsGesture);
     }
     if (DYYYGetBool(@"DYYYUserAgreementAccepted")) {
-        // VexCove-DYYY 同步：帧率浮窗 / 互动数全显 / 消息页与我的页隐藏模块（B 的 AfterAgreement 相位）
-        DYYYStartFPSOverlay();
-        DYYYStartExactInteractionCountHooks();
-        DYYYStartHideMessageAndMinePageHooks();
+        // VexCove-DYYY 同步：帧率浮窗 / 互动数全显 / 消息页与我的页隐藏模块（B 的 AfterAgreement 相位）。
+        // 与上面 HighFPS 同理：观察者注册不能在 %ctor（dyld 初始化阶段）直调，延后执行。
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+          DYYYStartFPSOverlay();
+          DYYYStartExactInteractionCountHooks();
+          DYYYStartHideMessageAndMinePageHooks();
+        });
 
         static dispatch_once_t onceToken;
         dispatch_once(&onceToken, ^{
