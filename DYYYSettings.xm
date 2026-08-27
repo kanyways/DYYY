@@ -2884,6 +2884,14 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
       for (NSDictionary *dict in downloadSettings) {
           AWESettingItemModel *item = [DYYYSettingsHelper createSettingItem:dict cellTapHandlers:cellTapHandlers];
 
+          // 相册作品信息默认关闭；首次展示设置页时同步默认值，
+          // 避免 UI 和保存链路对缺少 key 的默认判断不一致。
+          if ([item.identifier isEqualToString:@"DYYYAlbumMediaDescription"] &&
+              ![[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYAlbumMediaDescription"]) {
+              [DYYYSettingsHelper setUserDefaults:@NO forKey:@"DYYYAlbumMediaDescription"];
+              item.isSwitchOn = NO;
+          }
+
           // 特殊处理接口解析保存媒体选项
           if ([item.identifier isEqualToString:@"DYYYInterfaceDownload"]) {
               // 获取已保存的接口URL

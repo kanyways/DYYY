@@ -10,6 +10,109 @@
 #import "DYYYToast.h"
 #import "DYYYUtils.h"
 
+static NSString *DYYYAuthorProfileURL(AWEUserModel *author) {
+    if (!author) {
+        return nil;
+    }
+
+    if ([author respondsToSelector:@selector(secUserID)]) {
+        NSString *secUserID = author.secUserID;
+        if ([secUserID isKindOfClass:[NSString class]] && secUserID.length > 0) {
+            return [NSString stringWithFormat:@"https://www.douyin.com/user/%@", secUserID];
+        }
+    }
+
+    return nil;
+}
+
+static NSString *DYYYCompactAlbumURL(NSString *rawURL) {
+    if (![rawURL isKindOfClass:[NSString class]] || rawURL.length == 0) {
+        return nil;
+    }
+
+    NSURLComponents *components = [NSURLComponents componentsWithString:rawURL];
+    NSString *scheme = components.scheme.lowercaseString;
+    NSString *host = components.host.lowercaseString;
+    NSString *path = components.percentEncodedPath.length > 0 ? components.percentEncodedPath : components.path;
+    if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) {
+        return nil;
+    }
+    if (host.length == 0 || path.length == 0 || ![path hasPrefix:@"/"]) {
+        return nil;
+    }
+
+    // 只保留协议、域名和路径，明确丢弃 query 与 fragment，避免把分享追踪参数写入相册。
+    return [NSString stringWithFormat:@"%@://%@%@", scheme, host, path];
+}
+
+static NSString *DYYYAlbumDescriptionForAwemeModel(AWEAwemeModel *awemeModel, NSString *authorProfileURL, NSString *workURL) {
+    if (!awemeModel) {
+        return nil;
+    }
+
+    NSMutableArray<NSString *> *fields = [NSMutableArray array];
+    AWEUserModel *author = awemeModel.author;
+    NSString *nickname = author.nickname;
+    if ([nickname isKindOfClass:[NSString class]] && nickname.length > 0) {
+        [fields addObject:[NSString stringWithFormat:@"抖音作者：%@", nickname]];
+    }
+
+    NSString *displayID = nil;
+    if ([author respondsToSelector:@selector(uniqueIDForShow)]) {
+        displayID = [author uniqueIDForShow];
+    }
+    if (![displayID isKindOfClass:[NSString class]] || displayID.length == 0) {
+        if ([author respondsToSelector:@selector(tiktokDisplayID)]) {
+            displayID = [author tiktokDisplayID];
+        }
+    }
+    if (![displayID isKindOfClass:[NSString class]] || displayID.length == 0) {
+        displayID = author.shortID;
+    }
+    if ([displayID isKindOfClass:[NSString class]] && displayID.length > 0) {
+        [fields addObject:[NSString stringWithFormat:@"作者 ID：%@", displayID]];
+    }
+
+    NSString *resolvedAuthorProfileURL = authorProfileURL.length > 0 ? authorProfileURL : DYYYAuthorProfileURL(author);
+    if ([resolvedAuthorProfileURL isKindOfClass:[NSString class]] && resolvedAuthorProfileURL.length > 0) {
+        [fields addObject:[NSString stringWithFormat:@"作者主页：%@", resolvedAuthorProfileURL]];
+    }
+
+    NSString *caption = nil;
+    if ([awemeModel respondsToSelector:@selector(caption)]) {
+        caption = awemeModel.caption;
+    }
+    if (![caption isKindOfClass:[NSString class]] || caption.length == 0) {
+        caption = awemeModel.descriptionString;
+    }
+    if ([caption isKindOfClass:[NSString class]] && caption.length > 0) {
+        [fields addObject:[NSString stringWithFormat:@"作品文案：%@", caption]];
+    }
+
+    NSString *resolvedWorkURL = DYYYCompactAlbumURL(workURL.length > 0 ? workURL : awemeModel.shareURL);
+    if ([resolvedWorkURL isKindOfClass:[NSString class]] && resolvedWorkURL.length > 0) {
+        [fields addObject:[NSString stringWithFormat:@"作品链接：%@", resolvedWorkURL]];
+    }
+
+    NSNumber *createTime = awemeModel.createTime;
+    if ([createTime isKindOfClass:[NSNumber class]] && createTime.doubleValue > 0) {
+        static NSDateFormatter *formatter = nil;
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+          formatter = [[NSDateFormatter alloc] init];
+          formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+          formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+        });
+        NSDate *date = [NSDate dateWithTimeIntervalSince1970:createTime.doubleValue];
+        [fields addObject:[NSString stringWithFormat:@"发布时间：%@", [formatter stringFromDate:date]]];
+    }
+
+    if (fields.count == 0) {
+        return nil;
+    }
+    return [fields componentsJoinedByString:@"\n"];
+}
+
 // ============================================================================
 // DYYYManager：DYYY 插件的中枢管理类（单例）
 // ----------------------------------------------------------------------------
@@ -72,6 +175,11 @@
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *mediaTypeMap;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *filePathToDownloadID;
 
+// 相册说明文字：由长按面板等入口在弹出菜单时写入当前作品的信息，下载开始时取走一份，
+// 之后即使用户已经翻到别的作品，这次下载存进相册的说明也仍是它自己的。
+@property(nonatomic, copy) NSString *pendingAlbumDescription;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *albumDescriptionMap;  // 下载ID到说明文字的映射
+
 // 批量下载相关属性
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *downloadToBatchMap;                                                 // 下载ID到批量ID的映射
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *batchCompletedCountMap;                                             // 批量ID到已完成数量的映射
@@ -110,6 +218,7 @@
         _completionBlocks = [NSMutableDictionary dictionary];
         _mediaTypeMap = [NSMutableDictionary dictionary];
         _filePathToDownloadID = [NSMutableDictionary dictionary];
+        _albumDescriptionMap = [NSMutableDictionary dictionary];
 
         // 初始化批量下载相关字典
         _downloadToBatchMap = [NSMutableDictionary dictionary];
@@ -122,6 +231,37 @@
     return self;
 }
 
+// ===== 相册说明文字 =====
+// 「保存作品信息」开关：长按/双击面板弹出时 setAlbumDescriptionContextWithAwemeModel
+// 记下当前作品，之后实际的保存流程取走说明文字，随文件元数据一起进相册。
++ (NSString *)albumDescriptionForAwemeModel:(AWEAwemeModel *)awemeModel {
+    if (!awemeModel) {
+        return nil;
+    }
+
+    return DYYYAlbumDescriptionForAwemeModel(awemeModel, DYYYAuthorProfileURL(awemeModel.author), DYYYCompactAlbumURL(awemeModel.shareURL));
+}
+
++ (void)setAlbumDescriptionContextWithAwemeModel:(AWEAwemeModel *)awemeModel {
+    // 键不存在按关闭处理：默认不向相册写入作品说明，用户可在设置中主动开启。
+    id stored = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYAlbumMediaDescription"];
+    BOOL enabled = stored ? [stored boolValue] : NO;
+    DYYYManager *manager = [DYYYManager shared];
+    NSString *authorProfileURL = DYYYAuthorProfileURL(awemeModel.author);
+    NSString *workURL = DYYYCompactAlbumURL(awemeModel.shareURL);
+
+    @synchronized(manager) {
+        manager.pendingAlbumDescription = enabled ? DYYYAlbumDescriptionForAwemeModel(awemeModel, authorProfileURL, workURL) : nil;
+    }
+}
+
++ (NSString *)currentAlbumDescription {
+    DYYYManager *manager = [DYYYManager shared];
+    @synchronized(manager) {
+        return manager.pendingAlbumDescription;
+    }
+}
+
 // ===== 保存媒体到相册 =====
 // 要点：
 // 1. 相册写入前必须先请求权限，权限回调在任意队列，
@@ -132,6 +272,10 @@
 // 4. HEIC 类型先探测真实格式（可能是 webp/heic/gif），
 //    相册不认识的格式先转成 GIF 再保存。
 + (void)saveMedia:(NSURL *)mediaURL mediaType:(MediaType)mediaType completion:(void (^)(BOOL success))completion {
+    [self saveMedia:mediaURL mediaType:mediaType albumDescription:[self currentAlbumDescription] completion:completion];
+}
+
++ (void)saveMedia:(NSURL *)mediaURL mediaType:(MediaType)mediaType albumDescription:(NSString *)albumDescription completion:(void (^)(BOOL success))completion {
     if (mediaType == MediaTypeAudio) {
         if (completion) {
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -233,26 +377,198 @@
           return;
       }
 
-      [[PHPhotoLibrary sharedPhotoLibrary]
-          performChanges:^{
-            if (mediaType == MediaTypeVideo) {
-                [PHAssetChangeRequest creationRequestForAssetFromVideoAtFileURL:mediaURL];
-            } else {
-                UIImage *image = [UIImage imageWithContentsOfFile:mediaURL.path];
-                if (image) {
-                    [PHAssetChangeRequest creationRequestForAssetFromImage:image];
+      if (albumDescription.length == 0) {
+          [[PHPhotoLibrary sharedPhotoLibrary]
+              performChanges:^{
+                if (mediaType == MediaTypeVideo) {
+                    [PHAssetChangeRequest creationRequestForAssetFromVideoAtFileURL:mediaURL];
+                } else {
+                    UIImage *image = [UIImage imageWithContentsOfFile:mediaURL.path];
+                    if (image) {
+                        [PHAssetChangeRequest creationRequestForAssetFromImage:image];
+                    }
                 }
-            }
-          }
-          completionHandler:^(BOOL success, NSError *_Nullable error) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-              if (!success) {
-                  [DYYYUtils showToast:@"保存失败"];
               }
-              [[NSFileManager defaultManager] removeItemAtPath:mediaURL.path error:nil];
-              reportResult(success);
-            });
-          }];
+              completionHandler:^(BOOL success, NSError *_Nullable error) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                  if (!success) {
+                      [DYYYUtils showToast:@"保存失败"];
+                  }
+                  [[NSFileManager defaultManager] removeItemAtPath:mediaURL.path error:nil];
+                  reportResult(success);
+                });
+              }];
+          return;
+      }
+
+      // 相册里能显示的说明只能来自文件自身的元数据，PhotoKit 没有建完资产再补说明的接口，
+      // 所以先写一份带说明的副本，用副本建资产。写不成就用原件，宁可没说明也要存进相册。
+      if (mediaType == MediaTypeVideo) {
+          [self writeDescription:albumDescription
+                    toVideoAtURL:mediaURL
+                      completion:^(NSURL *decoratedURL) {
+                        NSURL *assetURL = decoratedURL ?: mediaURL;
+                        [self createAssetAtURL:assetURL mediaType:mediaType originalURL:mediaURL temporaryURL:decoratedURL reportResult:reportResult];
+                      }];
+          return;
+      }
+
+      NSURL *decoratedURL = [self temporaryImageURLByEmbeddingDescription:albumDescription intoImageAtURL:mediaURL];
+      NSURL *assetURL = decoratedURL ?: mediaURL;
+      [self createAssetAtURL:assetURL mediaType:mediaType originalURL:mediaURL temporaryURL:decoratedURL reportResult:reportResult];
+    }];
+}
+
++ (void)createAssetAtURL:(NSURL *)assetURL mediaType:(MediaType)mediaType originalURL:(NSURL *)originalURL temporaryURL:(NSURL *)temporaryURL reportResult:(void (^)(BOOL success))reportResult {
+    [[PHPhotoLibrary sharedPhotoLibrary]
+        performChanges:^{
+          // 按文件原样入库，文件里嵌好的说明才能留住；从 UIImage 建资产会重新编码并丢掉元数据。
+          PHAssetCreationRequest *request = [PHAssetCreationRequest creationRequestForAsset];
+          PHAssetResourceType resourceType = (mediaType == MediaTypeVideo) ? PHAssetResourceTypeVideo : PHAssetResourceTypePhoto;
+          [request addResourceWithType:resourceType fileURL:assetURL options:nil];
+        }
+        completionHandler:^(BOOL success, NSError *_Nullable error) {
+          if (!success && mediaType != MediaTypeVideo) {
+              // 少数图片的实际编码与扩展名不符，按文件入库会被 PhotoKit 拒；退回解码后再存。
+              UIImage *image = [UIImage imageWithContentsOfFile:assetURL.path];
+              if (image) {
+                  [[PHPhotoLibrary sharedPhotoLibrary]
+                      performChanges:^{
+                        [PHAssetChangeRequest creationRequestForAssetFromImage:image];
+                      }
+                      completionHandler:^(BOOL retrySuccess, NSError *_Nullable retryError) {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                          if (!retrySuccess) {
+                              [DYYYUtils showToast:@"保存失败"];
+                          }
+                          if (temporaryURL) {
+                              [[NSFileManager defaultManager] removeItemAtPath:temporaryURL.path error:nil];
+                          }
+                          [[NSFileManager defaultManager] removeItemAtPath:originalURL.path error:nil];
+                          reportResult(retrySuccess);
+                        });
+                      }];
+                  return;
+              }
+          }
+
+          dispatch_async(dispatch_get_main_queue(), ^{
+            if (!success) {
+                [DYYYUtils showToast:@"保存失败"];
+            }
+            if (temporaryURL) {
+                [[NSFileManager defaultManager] removeItemAtPath:temporaryURL.path error:nil];
+            }
+            [[NSFileManager defaultManager] removeItemAtPath:originalURL.path error:nil];
+            reportResult(success);
+          });
+        }];
+}
+
++ (NSURL *)temporaryImageURLByEmbeddingDescription:(NSString *)albumDescription intoImageAtURL:(NSURL *)imageURL {
+    if (albumDescription.length == 0 || !imageURL) {
+        return nil;
+    }
+
+    CGImageSourceRef source = CGImageSourceCreateWithURL((CFURLRef)imageURL, NULL);
+    if (!source) {
+        return nil;
+    }
+
+    CFStringRef sourceType = CGImageSourceGetType(source);
+    NSString *outputName = [NSString stringWithFormat:@"dyyy_desc_%@.%@", [NSUUID UUID].UUIDString, imageURL.pathExtension.length > 0 ? imageURL.pathExtension : @"jpg"];
+    NSURL *outputURL = [[NSURL fileURLWithPath:NSTemporaryDirectory()] URLByAppendingPathComponent:outputName];
+
+    CGImageDestinationRef destination = CGImageDestinationCreateWithURL((CFURLRef)outputURL, sourceType ?: kUTTypeJPEG, 1, NULL);
+    if (!destination) {
+        CFRelease(source);
+        return nil;
+    }
+
+    NSDictionary *existingProperties = (__bridge_transfer NSDictionary *)CGImageSourceCopyPropertiesAtIndex(source, 0, NULL);
+    NSMutableDictionary *properties = existingProperties ? [existingProperties mutableCopy] : [NSMutableDictionary dictionary];
+
+    NSMutableDictionary *tiff = [properties[(NSString *)kCGImagePropertyTIFFDictionary] mutableCopy] ?: [NSMutableDictionary dictionary];
+    tiff[(NSString *)kCGImagePropertyTIFFImageDescription] = albumDescription;
+    properties[(NSString *)kCGImagePropertyTIFFDictionary] = tiff;
+
+    NSMutableDictionary *iptc = [properties[(NSString *)kCGImagePropertyIPTCDictionary] mutableCopy] ?: [NSMutableDictionary dictionary];
+    iptc[(NSString *)kCGImagePropertyIPTCCaptionAbstract] = albumDescription;
+    properties[(NSString *)kCGImagePropertyIPTCDictionary] = iptc;
+
+    NSMutableDictionary *exif = [properties[(NSString *)kCGImagePropertyExifDictionary] mutableCopy] ?: [NSMutableDictionary dictionary];
+    exif[(NSString *)kCGImagePropertyExifUserComment] = albumDescription;
+    properties[(NSString *)kCGImagePropertyExifDictionary] = exif;
+
+    CGImageDestinationAddImageFromSource(destination, source, 0, (CFDictionaryRef)properties);
+    BOOL finalized = CGImageDestinationFinalize(destination);
+
+    CFRelease(destination);
+    CFRelease(source);
+
+    if (!finalized) {
+        [[NSFileManager defaultManager] removeItemAtPath:outputURL.path error:nil];
+        return nil;
+    }
+    return outputURL;
+}
+
++ (NSArray<AVMetadataItem *> *)metadataItemsByAppendingDescription:(NSString *)albumDescription toItems:(NSArray<AVMetadataItem *> *)items {
+    NSMutableArray<AVMetadataItem *> *result = items ? [items mutableCopy] : [NSMutableArray array];
+    if (albumDescription.length == 0) {
+        return result;
+    }
+
+    AVMutableMetadataItem *quickTimeItem = [AVMutableMetadataItem metadataItem];
+    quickTimeItem.keySpace = AVMetadataKeySpaceQuickTimeMetadata;
+    quickTimeItem.key = AVMetadataQuickTimeMetadataKeyDescription;
+    quickTimeItem.value = albumDescription;
+    [result addObject:quickTimeItem];
+
+    AVMutableMetadataItem *commonItem = [AVMutableMetadataItem metadataItem];
+    commonItem.keySpace = AVMetadataKeySpaceCommon;
+    commonItem.key = AVMetadataCommonKeyDescription;
+    commonItem.value = albumDescription;
+    [result addObject:commonItem];
+
+    return result;
+}
+
++ (void)writeDescription:(NSString *)albumDescription toVideoAtURL:(NSURL *)videoURL completion:(void (^)(NSURL *outputURL))completion {
+    void (^report)(NSURL *) = ^(NSURL *outputURL) {
+      if (completion) {
+          completion(outputURL);
+      }
+    };
+
+    if (albumDescription.length == 0 || !videoURL) {
+        report(nil);
+        return;
+    }
+
+    AVURLAsset *sourceAsset = [AVURLAsset URLAssetWithURL:videoURL options:nil];
+    AVAssetExportSession *export = [[AVAssetExportSession alloc] initWithAsset:sourceAsset presetName:AVAssetExportPresetPassthrough];
+    if (!export || ![export.supportedFileTypes containsObject:AVFileTypeQuickTimeMovie]) {
+        report(nil);
+        return;
+    }
+
+    NSString *outputName = [NSString stringWithFormat:@"dyyy_desc_%@.mov", [NSUUID UUID].UUIDString];
+    NSURL *outputURL = [[NSURL fileURLWithPath:NSTemporaryDirectory()] URLByAppendingPathComponent:outputName];
+    [[NSFileManager defaultManager] removeItemAtPath:outputURL.path error:nil];
+
+    // 直通封装：只重写容器和元数据，不重新编码，画质与体积都不变。
+    export.outputURL = outputURL;
+    export.outputFileType = AVFileTypeQuickTimeMovie;
+    export.metadata = [self metadataItemsByAppendingDescription:albumDescription toItems:sourceAsset.metadata];
+
+    [export exportAsynchronouslyWithCompletionHandler:^{
+      if (export.status == AVAssetExportSessionStatusCompleted) {
+          report(outputURL);
+          return;
+      }
+      [[NSFileManager defaultManager] removeItemAtPath:outputURL.path error:nil];
+      report(nil);
     }];
 }
 
@@ -262,6 +578,9 @@
 // 文件存在性检查放到后台队列做（文件 IO 耗时，避免卡主线程），
 // 检查完再跳回主线程决定是直接保存还是重新下载。
 + (void)downloadLivePhoto:(NSURL *)imageURL videoURL:(NSURL *)videoURL completion:(void (^)(void))completion {
+    // 下载一开始就取走说明文字，理由同 downloadMedia:
+    NSString *albumDescription = [self currentAlbumDescription];
+
     // 获取共享实例，确保FileLinks字典存在
     DYYYManager *manager = [DYYYManager shared];
     if (!manager.fileLinks) {
@@ -284,20 +603,20 @@
 
           dispatch_async(dispatch_get_main_queue(), ^{
             if (imageExists && videoExists) {
-                [[DYYYManager shared] saveLivePhoto:imagePath videoUrl:videoPath];
+                [[DYYYManager shared] saveLivePhoto:imagePath videoUrl:videoPath albumDescription:albumDescription];
                 if (completion) {
                     completion();
                 }
                 return;
             } else {
                 // 文件不完整，需要重新下载
-                [self startDownloadLivePhotoProcess:imageURL videoURL:videoURL uniqueKey:uniqueKey completion:completion];
+                [self startDownloadLivePhotoProcess:imageURL videoURL:videoURL uniqueKey:uniqueKey albumDescription:albumDescription completion:completion];
             }
           });
         });
     } else {
         // 没有缓存，直接开始下载
-        [self startDownloadLivePhotoProcess:imageURL videoURL:videoURL uniqueKey:uniqueKey completion:completion];
+        [self startDownloadLivePhotoProcess:imageURL videoURL:videoURL uniqueKey:uniqueKey albumDescription:albumDescription completion:completion];
     }
 }
 
@@ -307,7 +626,7 @@
 // NSURLSessionDownloadDelegate），以收到下载进度；每个任务的
 // NSProgress 再用 KVO 观察(见 observeValueForKeyPath)，两个进度
 // 取平均后由 0.1 秒的定时器刷新合并进度条。
-+ (void)startDownloadLivePhotoProcess:(NSURL *)imageURL videoURL:(NSURL *)videoURL uniqueKey:(NSString *)uniqueKey completion:(void (^)(void))completion {
++ (void)startDownloadLivePhotoProcess:(NSURL *)imageURL videoURL:(NSURL *)videoURL uniqueKey:(NSString *)uniqueKey albumDescription:(NSString *)albumDescription completion:(void (^)(void))completion {
     // 创建临时目录
     NSString *livePhotoPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"LivePhoto"];
 
@@ -459,7 +778,7 @@
             @try {
                 // 添加iOS版本检查
                 if (@available(iOS 15.0, *)) {
-                    [[DYYYManager shared] saveLivePhoto:imagePath videoUrl:videoPath];
+                    [[DYYYManager shared] saveLivePhoto:imagePath videoUrl:videoPath albumDescription:albumDescription];
                 }
             } @catch (NSException *exception) {
                 // 删除失败的文件
@@ -505,6 +824,8 @@
 }
 
 + (void)downloadMedia:(NSURL *)url mediaType:(MediaType)mediaType audio:(NSURL *)audioURL completion:(void (^)(BOOL success))completion {
+    // 下载一开始就取走说明文字：等下载完再取，用户可能已经翻到别的作品了。
+    NSString *albumDescription = [self currentAlbumDescription];
     [self downloadMediaWithProgress:url
                           mediaType:mediaType
                               audio:audioURL
@@ -545,12 +866,14 @@
                                                                                 [[NSFileManager defaultManager] removeItemAtURL:fileURL error:nil];
                                                                                 [self saveMedia:mergedURL
                                                                                       mediaType:mediaType
+                                                                              albumDescription:albumDescription
                                                                                      completion:^(BOOL saveSuccess) {
                                                                                        notifyCompletion(saveSuccess);
                                                                                      }];
                                                                             } else {
                                                                                 [self saveMedia:fileURL
                                                                                       mediaType:mediaType
+                                                                              albumDescription:albumDescription
                                                                                      completion:^(BOOL saveSuccess) {
                                                                                        notifyCompletion(saveSuccess);
                                                                                      }];
@@ -561,6 +884,7 @@
                                    }
                                    [self saveMedia:fileURL
                                          mediaType:mediaType
+                                 albumDescription:albumDescription
                                         completion:^(BOOL saveSuccess) {
                                           notifyCompletion(saveSuccess);
                                         }];
@@ -678,6 +1002,9 @@
         return;
     }
 
+    // 批量开始前取走说明文字：整批图片共用一个说明，下载完成落库时拼进元数据。
+    NSString *batchAlbumDescription = [self currentAlbumDescription];
+
     dispatch_async(dispatch_get_main_queue(), ^{
       CGRect screenBounds = [UIScreen mainScreen].bounds;
       DYYYToast *progressView = [[DYYYToast alloc] initWithFrame:screenBounds];
@@ -719,6 +1046,9 @@
           [[DYYYManager shared].downloadTasks setObject:downloadTask forKey:downloadID];
           [[DYYYManager shared].taskProgressMap setObject:@0.0 forKey:downloadID];
           [[DYYYManager shared] setMediaType:MediaTypeImage forDownloadID:downloadID];
+          if (batchAlbumDescription.length > 0) {
+              [[DYYYManager shared].albumDescriptionMap setObject:batchAlbumDescription forKey:downloadID];
+          }
           [downloadTask resume];
       }
     });
@@ -1045,8 +1375,11 @@
 
     if (isBatchDownload) {
         if (!moveError) {
+            // 批量开始时已按 downloadID 登记说明文字，这里取回它对齐每张图的来源。
+            NSString *batchAlbumDescription = self.albumDescriptionMap[downloadIDForTask];
             [DYYYManager saveMedia:destinationURL
                          mediaType:mediaType
+                 albumDescription:batchAlbumDescription
                         completion:^(BOOL success) {
                           [[DYYYManager shared] incrementCompletedAndUpdateProgressForBatch:batchID success:success];
                         }];
@@ -1057,6 +1390,7 @@
         [self.downloadTasks removeObjectForKey:downloadIDForTask];
         [self.taskProgressMap removeObjectForKey:downloadIDForTask];
         [self.mediaTypeMap removeObjectForKey:downloadIDForTask];
+        [self.albumDescriptionMap removeObjectForKey:downloadIDForTask];
     } else {
         void (^completionBlock)(BOOL success, NSURL *fileURL) = self.completionBlocks[downloadIDForTask];
 
@@ -1120,6 +1454,7 @@
         [self.taskProgressMap removeObjectForKey:downloadIDForTask];
         [self.mediaTypeMap removeObjectForKey:downloadIDForTask];
         [self.downloadToBatchMap removeObjectForKey:downloadIDForTask];
+        [self.albumDescriptionMap removeObjectForKey:downloadIDForTask];
     } else {
         // 单个下载错误处理
         void (^completionBlock)(BOOL success, NSURL *fileURL) = self.completionBlocks[downloadIDForTask];
@@ -1149,6 +1484,10 @@
 // 3. PHAssetCreationRequest 把「照片+配对视频」两条资源一起提交给相册。
 // MARK: 以下都是创建保存实况的调用方法
 - (void)saveLivePhoto:(NSString *)imageSourcePath videoUrl:(NSString *)videoSourcePath {
+    [self saveLivePhoto:imageSourcePath videoUrl:videoSourcePath albumDescription:[DYYYManager currentAlbumDescription]];
+}
+
+- (void)saveLivePhoto:(NSString *)imageSourcePath videoUrl:(NSString *)videoSourcePath albumDescription:(NSString *)albumDescription {
     // 首先检查iOS版本
     if (@available(iOS 15.0, *)) {
         // iOS 15及更高版本使用原有的实现
@@ -1166,6 +1505,7 @@
           [self useAssetWriter:photoURL
                          video:videoURL
                     identifier:identifier
+              albumDescription:albumDescription
                       complete:^(BOOL success, NSString *photoFile, NSString *videoFile, NSError *error) {
                         NSURL *photo = [NSURL fileURLWithPath:photoFile];
                         NSURL *video = [NSURL fileURLWithPath:videoFile];
@@ -1194,13 +1534,13 @@
     }
 }
 
-- (void)useAssetWriter:(NSURL *)photoURL video:(NSURL *)videoURL identifier:(NSString *)identifier complete:(void (^)(BOOL success, NSString *photoFile, NSString *videoFile, NSError *error))complete {
+- (void)useAssetWriter:(NSURL *)photoURL video:(NSURL *)videoURL identifier:(NSString *)identifier albumDescription:(NSString *)albumDescription complete:(void (^)(BOOL success, NSString *photoFile, NSString *videoFile, NSError *error))complete {
     NSString *photoName = [photoURL lastPathComponent];
     NSString *photoFile = [self filePathFromTmp:photoName];
-    [self addMetadataToPhoto:photoURL outputFile:photoFile identifier:identifier];
+    [self addMetadataToPhoto:photoURL outputFile:photoFile identifier:identifier albumDescription:albumDescription];
     NSString *videoName = [videoURL lastPathComponent];
     NSString *videoFile = [self filePathFromTmp:videoName];
-    [self addMetadataToVideo:videoURL outputFile:videoFile identifier:identifier];
+    [self addMetadataToVideo:videoURL outputFile:videoFile identifier:identifier albumDescription:albumDescription];
     if (!DYYYManager.shared->group)
         return;
     dispatch_group_notify(DYYYManager.shared->group, dispatch_get_main_queue(), ^{
@@ -1219,7 +1559,7 @@
           complete(YES, photoFile, videoFile, nil);
     }];
 }
-- (void)addMetadataToPhoto:(NSURL *)photoURL outputFile:(NSString *)outputFile identifier:(NSString *)identifier {
+- (void)addMetadataToPhoto:(NSURL *)photoURL outputFile:(NSString *)outputFile identifier:(NSString *)identifier albumDescription:(NSString *)albumDescription {
     NSMutableData *data = [NSData dataWithContentsOfURL:photoURL].mutableCopy;
     // 源文件不可读时 data 为 nil：CGImageDestinationCreateWithData 传 NULL
     // 有崩溃风险，writeToFile 对 nil 也会静默失败，提前返回更安全。
@@ -1228,7 +1568,11 @@
     }
     UIImage *image = [UIImage imageWithData:data];
     CGImageRef imageRef = image.CGImage;
-    NSDictionary *imageMetadata = @{(NSString *)kCGImagePropertyMakerAppleDictionary : @{@"17" : identifier}};
+    NSMutableDictionary *imageMetadata = [NSMutableDictionary dictionaryWithObject:@{@"17" : identifier} forKey:(NSString *)kCGImagePropertyMakerAppleDictionary];
+    if (albumDescription.length > 0) {
+        imageMetadata[(NSString *)kCGImagePropertyTIFFDictionary] = @{(NSString *)kCGImagePropertyTIFFImageDescription : albumDescription};
+        imageMetadata[(NSString *)kCGImagePropertyIPTCDictionary] = @{(NSString *)kCGImagePropertyIPTCCaptionAbstract : albumDescription};
+    }
     CGImageDestinationRef dest = CGImageDestinationCreateWithData((CFMutableDataRef)data, kUTTypeJPEG, 1, nil);
     if (dest) {
         CGImageDestinationAddImage(dest, imageRef, (CFDictionaryRef)imageMetadata);
@@ -1245,7 +1589,7 @@
 // 这里把 reader/writer/queue/group 存进共享实例变量供 writeTrack /
 // finishWritingTracksWithPhoto 协作使用——同一时刻只能跑一个任务；
 // 批量场景改用 addMetadataToVideoWithLocalVars（局部变量版）规避竞态。
-- (void)addMetadataToVideo:(NSURL *)videoURL outputFile:(NSString *)outputFile identifier:(NSString *)identifier {
+- (void)addMetadataToVideo:(NSURL *)videoURL outputFile:(NSString *)outputFile identifier:(NSString *)identifier albumDescription:(NSString *)albumDescription {
     // 每个新任务开始时清空共享 ivar：若上次任务在中途失败（reader/writer
     // 创建失败提前 return），group/reader/writer 仍是旧值，本次调用会在
     // 1202 行对陈旧 group 挂 notify、对陈旧 writer 二次 finishWriting——
@@ -1263,6 +1607,7 @@
     NSMutableArray<AVMetadataItem *> *metadata = asset.metadata.mutableCopy;
     AVMetadataItem *item = [self createContentIdentifierMetadataItem:identifier];
     [metadata addObject:item];
+    metadata = [[DYYYManager metadataItemsByAppendingDescription:albumDescription toItems:metadata] mutableCopy];
     NSURL *videoFileURL = [NSURL fileURLWithPath:outputFile];
     [self deleteFile:outputFile];
     AVAssetWriter *writer = [AVAssetWriter assetWriterWithURL:videoFileURL fileType:AVFileTypeQuickTimeMovie error:&error];
@@ -1544,6 +1889,9 @@
         return;
     }
 
+    // 批量开始前取走说明文字：整批下载共用一个说明，拼进每张实况的图片元数据。
+    NSString *albumDescription = [self currentAlbumDescription];
+
     // 创建进度显示UI
     dispatch_async(dispatch_get_main_queue(), ^{
       CGRect screenBounds = [UIScreen mainScreen].bounds;
@@ -1639,7 +1987,10 @@
                         // 处理照片和元数据
                         NSString *photoName = [imagePath lastPathComponent];
                         NSString *photoFile = [[DYYYManager shared] filePathFromTmp:photoName];
-                        [[DYYYManager shared] addMetadataToPhoto:[NSURL fileURLWithPath:imagePath] outputFile:photoFile identifier:identifier];
+                        [[DYYYManager shared] addMetadataToPhoto:[NSURL fileURLWithPath:imagePath]
+                                                      outputFile:photoFile
+                                                      identifier:identifier
+                                                albumDescription:albumDescription];
 
                         // 处理视频和元数据
                         NSString *videoName = [videoPath lastPathComponent];
@@ -1649,6 +2000,7 @@
                         [[DYYYManager shared] addMetadataToVideoWithLocalVars:[NSURL fileURLWithPath:videoPath]
                                                                    outputFile:videoFile
                                                                    identifier:identifier
+                                                             albumDescription:albumDescription
                                                                        reader:&localReader
                                                                        writer:&localWriter
                                                                         queue:localQueue
@@ -1838,6 +2190,7 @@
 - (void)addMetadataToVideoWithLocalVars:(NSURL *)videoURL
                              outputFile:(NSString *)outputFile
                              identifier:(NSString *)identifier
+                       albumDescription:(NSString *)albumDescription
                                  reader:(AVAssetReader **)readerPtr
                                  writer:(AVAssetWriter **)writerPtr
                                   queue:(dispatch_queue_t)queue
@@ -1857,6 +2210,7 @@
     NSMutableArray<AVMetadataItem *> *metadata = asset.metadata.mutableCopy;
     AVMetadataItem *item = [self createContentIdentifierMetadataItem:identifier];
     [metadata addObject:item];
+    metadata = [[DYYYManager metadataItemsByAppendingDescription:albumDescription toItems:metadata] mutableCopy];
     NSURL *videoFileURL = [NSURL fileURLWithPath:outputFile];
     [self deleteFile:outputFile];
 
@@ -1953,6 +2307,8 @@
 }
 
 + (void)parseAndDownloadVideoWithShareLink:(NSString *)shareLink apiKey:(NSString *)apiKey {
+    // 解析要等一次网络往返，先把说明文字取下来跟着这次解析走。
+    NSString *albumDescription = [self currentAlbumDescription];
     if (shareLink.length == 0 || apiKey.length == 0) {
         [DYYYUtils showToast:@"分享链接或API密钥无效"];
         return;
@@ -1992,7 +2348,7 @@
                                                     }
 
                                                     // 交给handleVideoData处理数据
-                                                    [self handleVideoData:dataDict];
+                                                    [self handleVideoData:dataDict albumDescription:albumDescription];
                                                   });
                                                 }];
 
@@ -2005,7 +2361,14 @@
 // AWEUserActionSheetView / AWEUserSheetAction 是抖音私有 UI 类，
 // 用 NSClassFromString 在运行时按名字创建：编译时不依赖宿主 App 的类，
 // 抖音更新后类名变了也不影响编译（坏处是类名变了功能会静默失效）。
-+ (void)handleVideoData:(NSDictionary *)dataDict {
++ (void)handleVideoData:(NSDictionary *)dataDict albumDescription:(NSString *)albumDescription {
+    // 弹窗是模态的，展示期间用户翻不动作品，所以在这里把说明文字挂回去，
+    // 各行 handler 触发下载时取到的就是这次解析对应的那条。
+    DYYYManager *manager = [DYYYManager shared];
+    @synchronized(manager) {
+        manager.pendingAlbumDescription = albumDescription;
+    }
+
     // 首先检查videos和images数组
     NSArray *videoList = dataDict[@"video_list"];
     NSArray *videos = dataDict[@"videos"];

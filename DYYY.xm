@@ -10321,6 +10321,9 @@ static NSHashTable *processedParentViews = nil;
             awemeModel = [self performSelector:@selector(awemeModel)];
         }
 
+        // 记录当前作品，双击菜单里的保存项落到相册时才带得上说明文字。
+        [DYYYManager setAlbumDescriptionContextWithAwemeModel:awemeModel];
+
         AWEVideoModel *videoModel = awemeModel.video;
         AWEMusicModel *musicModel = awemeModel.music;
         NSURL *audioURL = nil;

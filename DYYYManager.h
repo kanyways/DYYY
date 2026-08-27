@@ -23,6 +23,17 @@
 
 #pragma mark - UI相关方法
 
+#pragma mark - 相册说明文字
+/**
+ * 记录当前作品，之后保存到相册的媒体会带上作者、作者 ID、主页 URL、作品文案、作品 URL 和发布时间说明。
+ * 主页和作品 URL 只保留精简网页地址的协议、域名和路径，不写入分享查询参数。
+ * 在弹出下载菜单前调用即可；传 nil 表示本次保存不写说明。
+ */
++ (void)setAlbumDescriptionContextWithAwemeModel:(AWEAwemeModel *)awemeModel;
+
+/** 按当前作品生成说明文字，取不到任何字段时返回 nil。 */
++ (NSString *)albumDescriptionForAwemeModel:(AWEAwemeModel *)awemeModel;
+
 #pragma mark - 媒体保存方法
 /**
  * 保存媒体文件到相册
@@ -32,12 +43,33 @@
  */
 + (void)saveMedia:(NSURL *)mediaURL mediaType:(MediaType)mediaType completion:(void (^)(BOOL success))completion;
 
+/** 保存媒体文件到相册，并把说明文字写进文件元数据 */
++ (void)saveMedia:(NSURL *)mediaURL mediaType:(MediaType)mediaType albumDescription:(NSString *)albumDescription completion:(void (^)(BOOL success))completion;
+
 /**
  * 保存实况照片
  * @param imageSourcePath 图片源路径
  * @param videoSourcePath 视频源路径
  */
 - (void)saveLivePhoto:(NSString *)imageSourcePath videoUrl:(NSString *)videoSourcePath;
+
+/** 存实况照片，并把说明文字写进配对的图片与视频。 */
+- (void)saveLivePhoto:(NSString *)imageSourcePath videoUrl:(NSString *)videoSourcePath albumDescription:(NSString *)albumDescription;
+
+/** 取本次下载该带的说明文字。 */
++ (NSString *)currentAlbumDescription;
+
+/** 把说明文字嵌进图片副本，返回临时文件；失败返回 nil。 */
++ (NSURL *)temporaryImageURLByEmbeddingDescription:(NSString *)albumDescription intoImageAtURL:(NSURL *)imageURL;
+
+/** 把说明文字嵌进视频副本（直通封装、不转码），失败时回调 nil。 */
++ (void)writeDescription:(NSString *)albumDescription toVideoAtURL:(NSURL *)videoURL completion:(void (^)(NSURL *outputURL))completion;
+
+/** 在原有条目基础上追加说明文字条目。 */
++ (NSArray<AVMetadataItem *> *)metadataItemsByAppendingDescription:(NSString *)albumDescription toItems:(NSArray<AVMetadataItem *> *)items;
+
+/** 由文件建相册资产，保留文件里已嵌好的元数据。 */
++ (void)createAssetAtURL:(NSURL *)assetURL mediaType:(MediaType)mediaType originalURL:(NSURL *)originalURL temporaryURL:(NSURL *)temporaryURL reportResult:(void (^)(BOOL success))reportResult;
 
 #pragma mark - 媒体下载方法
 /**
