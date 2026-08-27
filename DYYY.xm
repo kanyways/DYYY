@@ -4888,7 +4888,12 @@ static void DYYYApplyPlayInteractionElementLayoutFromElement(id element, NSStrin
     // 【A 补充】宿主重排期间会把属地文案的配色/粗体还原成默认，这里幂等重刷一次：
     // updateLabelWithLocation 的 containsString 守卫保证缓存路径不会再改文案，
     // 因此这里只额外补样式与布局，不会重复追加或闪烁。
-    UILabel *label = [self timestampLabel];
+    // timestampLabel 不在宿主公开 @interface 中，须经运行时调用，编译期不声明。
+    SEL timestampLabelSelector = sel_registerName("timestampLabel");
+    UILabel *label = nil;
+    if (timestampLabelSelector && [self respondsToSelector:timestampLabelSelector]) {
+        label = ((UILabel *(*)(id, SEL))objc_msgSend)(self, timestampLabelSelector);
+    }
     if (label && label.text.length > 0 && [label.text containsString:@"IP属地："]) {
         NSString *layoutColorHex = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYLabelColor"];
         if (DYYYGetBool(@"DYYYEnableRandomGradient")) {
