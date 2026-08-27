@@ -1364,6 +1364,54 @@ static void DYYYMigrateNotificationBlurTransparencyIfNeeded(void) {
     });
 }
 
+static NSString *DYYYUserDefaultsStringValue(id value) {
+    if ([value isKindOfClass:[NSString class]]) {
+        return (NSString *)value;
+    }
+    if ([value isKindOfClass:[NSNumber class]]) {
+        return [(NSNumber *)value stringValue];
+    }
+    return nil;
+}
+
+// 迁移：文案缩放从旧单键（DYYYNicknameScale）拆出独立键 DYYYDescriptionScale；
+// 老用户设置的昵称文案缩放值一并作为文案缩放的初始值。
+// 注意：只复制 scale，不迁移偏移符号——本工程读写端仍按"正=下移"旧约定。
+static void DYYYMigrateScaleAndSizeSettingsIfNeeded(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        if ([defaults boolForKey:@"DYYYScaleAndSizeSettingsMigratedV1"]) {
+            return;
+        }
+
+        NSString *nicknameScale = DYYYUserDefaultsStringValue([defaults objectForKey:@"DYYYNicknameScale"]);
+        if (nicknameScale.length > 0 && [defaults objectForKey:@"DYYYDescriptionScale"] == nil) {
+            [defaults setObject:nicknameScale forKey:@"DYYYDescriptionScale"];
+        }
+
+        [defaults setBool:YES forKey:@"DYYYScaleAndSizeSettingsMigratedV1"];
+    });
+}
+
+// 迁移：属地缩放从旧单键拆出独立键 DYYYIPLabelScale，同样回填旧值。
+static void DYYYMigrateScaleAndSizeSettingsV2IfNeeded(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+        if ([defaults boolForKey:@"DYYYScaleAndSizeSettingsMigratedV2"]) {
+            return;
+        }
+
+        NSString *nicknameScale = DYYYUserDefaultsStringValue([defaults objectForKey:@"DYYYNicknameScale"]);
+        if (nicknameScale.length > 0 && [defaults objectForKey:@"DYYYIPLabelScale"] == nil) {
+            [defaults setObject:nicknameScale forKey:@"DYYYIPLabelScale"];
+        }
+
+        [defaults setBool:YES forKey:@"DYYYScaleAndSizeSettingsMigratedV2"];
+    });
+}
+
 static BOOL DYYYShouldDisableAllHDR(void) {
     // 热路径（UIImageView setImage / CALayer 等每帧调用）用缓存读取
     return [[DYYYUtils fastStringForKey:kDYYYHDRModeKey] isEqualToString:kDYYYHDRModeDisable];
@@ -3848,7 +3896,7 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
     if (cachedLocation) {
         updateLabelWithLocation(label, cachedLocation);
 
-        NSString *ipScaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameScale"];
+        NSString *ipScaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYIPLabelScale"];
         if (ipScaleValue.length > 0) {
             UIFont *originalFont = label.font;
             CGFloat offset = DYYYGetFloat(@"DYYYIPLabelVerticalOffset");
@@ -3948,7 +3996,7 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
     [locationCache setObject:displayLocation forKey:cacheKey];
     updateLabelWithLocation(label, displayLocation);
 
-    NSString *ipScaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameScale"];
+    NSString *ipScaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYIPLabelScale"];
     if (ipScaleValue.length > 0) {
         UIFont *originalFont = label.font;
         CGFloat offset = DYYYGetFloat(@"DYYYIPLabelVerticalOffset");
@@ -12556,7 +12604,7 @@ static Class TagViewClass = nil;
 
     if ([viewController isKindOfClass:%c(AWELiveNewPreStreamViewController)]) {
         const BOOL shouldShiftUp = [DYYYUtils fastBoolForKey:@"DYYYEnableFullScreen"];
-        const CGFloat labelScaleValue = [DYYYUtils fastFloatForKey:@"DYYYNicknameScale"];
+        const CGFloat labelScaleValue = [DYYYUtils fastFloatForKey:@"DYYYDescriptionScale"];
         const CGFloat targetLabelScale = (labelScaleValue != 0.0) ? MAX(0.01, labelScaleValue) : 1.0;
         const CGFloat elementScaleValue = [DYYYUtils fastFloatForKey:@"DYYYElementScale"];
         const CGFloat targetElementScale = (elementScaleValue != 0.0) ? MAX(0.01, elementScaleValue) : 1.0;
@@ -12656,9 +12704,9 @@ static Class TagViewClass = nil;
                 }
             }
         }
-        // 左侧元素的处理逻辑
+        // 左侧元素的处理逻辑（左侧栈含文案元素，拆键后走文案缩放）
         else if (isLeftStack) {
-            NSString *scaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameScale"];
+            NSString *scaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDescriptionScale"];
             if (scaleValue.length > 0) {
                 CGFloat scale = [scaleValue floatValue];
                 self.transform = CGAffineTransformIdentity;
@@ -12686,7 +12734,7 @@ static Class TagViewClass = nil;
     if ([viewController isKindOfClass:%c(AWEPlayInteractionViewController)]) {
 
         if ([self.accessibilityLabel isEqualToString:@"left"] || [DYYYUtils containsSubviewOfClass:NSClassFromString(@"AWEFeedAnchorContainerView") inContainer:self]) {
-            NSString *scaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameScale"];
+            NSString *scaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYDescriptionScale"];
             if (scaleValue.length > 0) {
                 CGFloat scale = [scaleValue floatValue];
                 self.transform = CGAffineTransformIdentity;
@@ -12770,7 +12818,7 @@ static Class TagViewClass = nil;
 
     if ([viewController isKindOfClass:%c(AWELiveNewPreStreamViewController)]) {
         const BOOL shouldShiftUp = [DYYYUtils fastBoolForKey:@"DYYYEnableFullScreen"];
-        const CGFloat labelScaleValue = [DYYYUtils fastFloatForKey:@"DYYYNicknameScale"];
+        const CGFloat labelScaleValue = [DYYYUtils fastFloatForKey:@"DYYYDescriptionScale"];
         const CGFloat targetLabelScale = (labelScaleValue != 0.0) ? MAX(0.01, labelScaleValue) : 1.0;
         const CGFloat elementScaleValue = [DYYYUtils fastFloatForKey:@"DYYYElementScale"];
         const CGFloat targetElementScale = (elementScaleValue != 0.0) ? MAX(0.01, elementScaleValue) : 1.0;
@@ -14019,6 +14067,8 @@ static void DYYYHideDouYinSelectAppGuideViews(id owner) {
 
     DYYYMigrateCombinedHDRModeIfNeeded();
     DYYYMigrateNotificationBlurTransparencyIfNeeded();
+    DYYYMigrateScaleAndSizeSettingsIfNeeded();
+    DYYYMigrateScaleAndSizeSettingsV2IfNeeded();
 
     // VexCove-DYYY 同步：性能高帧率模块（B 的 LoaderSafe 相位，与用户协议无关）
     DYYYStartHighFPSHooks();
