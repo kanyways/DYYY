@@ -1532,6 +1532,9 @@
         BOOL shouldFilter = ([className isEqualToString:@"AWECommentIMSwiftImpl.CommentLongPressPanelForwardElement"] &&
                              [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideCommentLongPressDaily"]) ||
 
+                            ([className isEqualToString:@"AWECommentLongPressPanelSwiftImpl.CommentLongPressPanelFavoriteCommentElement"] &&
+                             [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideCommentLongPressFavorite"]) ||
+
                             ([className isEqualToString:@"AWECommentLongPressPanelSwiftImpl.CommentLongPressPanelCopyElement"] &&
                              [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideCommentLongPressCopy"]) ||
 

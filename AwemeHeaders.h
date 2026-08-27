@@ -466,7 +466,27 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @interface AWEAwemeDetailTableView : UITableView
 @end
 
+@interface _TtC33AWECommentPanelContainerSwiftImpl31CommentViewControllerStateModel : NSObject
+- (BOOL)isSkipCommentPanelLifecycle;
+- (BOOL)isCommentImageBrowsing;
+@end
+
 @interface AWECommentContainerViewController : UIViewController
+- (_TtC33AWECommentPanelContainerSwiftImpl31CommentViewControllerStateModel *)state;
+@end
+
+@interface _TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel : NSObject
+- (instancetype)init;
+- (void)setTabManager:(id)tabManager;
+- (BOOL)isFeedVideoPlaying;
+- (id)feedVideoPlayerController;
+- (void)pauseVideoIfPlayingWithoutShowingPauseIcon;
+- (void)recoverPlayIfPauseByComment;
+@end
+
+@interface AWECommentMediaFeedParams : NSObject
+@property(nonatomic, copy) BOOL (^panelVideoHasPausedByComment)(void);
+@property(nonatomic, copy) BOOL (^fullPanelShouldPreventPlay)(void);
 @end
 
 @interface AWECommentInputViewController : UIViewController

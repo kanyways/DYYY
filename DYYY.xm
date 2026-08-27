@@ -24,6 +24,7 @@
 #import "AWMSafeDispatchTimer.h"
 #import "DYYYConstants.h"
 #import "DYYYFloatClearButton.h"
+#import "DYYYPrivacyRecordUploadGuard.h"
 #import "DYYYFloatSpeedButton.h"
 #import "DYYYSettingViewController.h"
 #import "DYYYToast.h"
@@ -8575,6 +8576,7 @@ static NSHashTable *processedParentViews = nil;
     BOOL skipPhotoText = DYYYGetBool(@"DYYYSkipPhotoText"); // 图文过滤
     BOOL skipPhoto = DYYYGetBool(@"DYYYSkipPhoto"); // 图集过滤
     BOOL skipMusic = DYYYGetBool(@"DYYYSkipMusic"); // 音乐过滤
+    BOOL skipFriendsVideo = DYYYGetBool(@"DYYYSkipFriendsVideo"); // 朋友作品过滤
     BOOL shouldDisableHDR = DYYYShouldDisableAllHDR();
     BOOL noAds = DYYYGetBool(@"DYYYNoAds");
 
@@ -8618,6 +8620,15 @@ static NSHashTable *processedParentViews = nil;
             [m respondsToSelector:@selector(referString)] &&
             [m.referString isEqualToString:@"homepage_hot"]) {
             continue; // 图集且来自推荐页，跳过
+        }
+
+        // 2.2.1 朋友作品过滤逻辑（推荐页）：仅使用宿主原生 isFamiliarItem 标记。
+        if (skipFriendsVideo &&
+            [m respondsToSelector:@selector(referString)] &&
+            [m.referString isEqualToString:@"homepage_hot"] &&
+            [m respondsToSelector:@selector(isFamiliarItem)] &&
+            m.isFamiliarItem) {
+            continue; // 朋友作品且来自推荐页，跳过
         }
 
         // 2.3 音乐过滤逻辑（推荐页）
@@ -8824,6 +8835,7 @@ static NSHashTable *processedParentViews = nil;
     BOOL skipPhotoText = DYYYGetBool(@"DYYYSkipPhotoText");
     BOOL skipMusic = DYYYGetBool(@"DYYYSkipMusic");
     BOOL skipAIInteraction = DYYYGetBool(@"DYYYSkipAIInteraction");
+    BOOL skipFriendsVideo = DYYYGetBool(@"DYYYSkipFriendsVideo");
     BOOL filterHDR = DYYYShouldFilterGlobalHDR();
 
     BOOL shouldFilterAds = noAds && [DYYYUtils isAdvertisementAwemeModel:self];
@@ -8834,6 +8846,7 @@ static NSHashTable *processedParentViews = nil;
     BOOL shouldskipPhotoText = skipPhotoText && self.isNewTextMode && isRecommendFeed;
     BOOL shouldFilterMusic = skipMusic && self.musicCard && isRecommendFeed;
     BOOL shouldFilterAIInteraction = skipAIInteraction && (self.awemeType == 162) && isRecommendFeed;
+    BOOL shouldFilterFriendsVideo = skipFriendsVideo && isRecommendFeed && [self respondsToSelector:@selector(isFamiliarItem)] && self.isFamiliarItem;
     BOOL shouldFilterHDR = NO;
     BOOL shouldFilterLowLikes = NO;
     BOOL shouldFilterKeywords = NO;
@@ -8950,7 +8963,7 @@ static NSHashTable *processedParentViews = nil;
     }
 
     return shouldFilterAds || shouldFilterAllLive || shouldFilterHotSpot || shouldFilterMusic || shouldFilterHDR || shouldFilterKeywords || shouldFilterProp ||
-           shouldFilterTime || shouldFilterUser;
+           shouldFilterTime || shouldFilterUser || shouldFilterFriendsVideo;
 }
 
 - (AWEECommerceLabel *)ecommerceBelowLabel {
@@ -11299,13 +11312,222 @@ static Class tabBarButtonClass = nil;
 }
 %end
 
+// ---------------------------------------------------------------------
+// ==== VexCove-DYYY 同步新增：查看评论暂停播放（评论期间暂停视频播放） ====
+// ---------------------------------------------------------------------
+static NSHashTable<_TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *> *dyyyCommentPauseViewModels = nil;
+static __weak _TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *dyyyLastCommentPauseViewModel = nil;
+
+static NSObject *DYYYCommentPauseViewModelRegistryLock(void) {
+    static NSObject *lock = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+      lock = [NSObject new];
+    });
+    return lock;
+}
+
+static void DYYYRegisterCommentPauseViewModel(_TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *viewModel) {
+    if (!viewModel) {
+        return;
+    }
+
+    @synchronized(DYYYCommentPauseViewModelRegistryLock()) {
+        if (!dyyyCommentPauseViewModels) {
+            dyyyCommentPauseViewModels = [NSHashTable weakObjectsHashTable];
+        }
+        [dyyyCommentPauseViewModels addObject:viewModel];
+    }
+}
+
+static NSArray<_TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *> *DYYYRegisteredCommentPauseViewModels(void) {
+    @synchronized(DYYYCommentPauseViewModelRegistryLock()) {
+        return dyyyCommentPauseViewModels.allObjects ?: @[];
+    }
+}
+
+static BOOL DYYYCommentViewModelIsPlaying(_TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *viewModel) {
+    if (!viewModel || ![viewModel respondsToSelector:@selector(isFeedVideoPlaying)]) {
+        return NO;
+    }
+
+    @try {
+        return [viewModel isFeedVideoPlaying];
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}
+
+static CGFloat DYYYCommentViewModelScore(_TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *viewModel) {
+    CGFloat score = 0.0;
+    id playerController = nil;
+    @try {
+        if ([viewModel respondsToSelector:@selector(feedVideoPlayerController)]) {
+            playerController = [viewModel feedVideoPlayerController];
+        }
+    } @catch (NSException *exception) {
+        return score;
+    }
+
+    AWEAwemeModel *viewModelAweme = DYYYSpeedAwemeFromObject(playerController);
+    if (DYYYAwemeModelsMatch(viewModelAweme, dyyyCurrentSpeedAweme)) {
+        score += 1000000000000.0;
+    }
+    if ([playerController isKindOfClass:[UIViewController class]]) {
+        CGFloat visibilityScore = DYYYViewControllerVisibilityScore((UIViewController *)playerController);
+        if (visibilityScore >= 0.0) {
+            score += visibilityScore;
+        }
+    }
+    return score;
+}
+
+static _TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *DYYYCurrentPlayingCommentViewModel(void) {
+    _TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *bestViewModel = nil;
+    CGFloat bestScore = -CGFLOAT_MAX;
+    for (_TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *viewModel in DYYYRegisteredCommentPauseViewModels()) {
+        if (!DYYYCommentViewModelIsPlaying(viewModel)) {
+            continue;
+        }
+
+        CGFloat score = DYYYCommentViewModelScore(viewModel);
+        if (viewModel == dyyyLastCommentPauseViewModel) {
+            score += 1.0;
+        }
+        if (!bestViewModel || score > bestScore) {
+            bestViewModel = viewModel;
+            bestScore = score;
+        }
+    }
+    return bestViewModel;
+}
+
+static void DYYYCommentPausePlaybackIfNeeded(void) {
+    if (!dyyyCommentViewVisible || !DYYYGetBool(@"DYYYCommentPausePlayback")) {
+        return;
+    }
+
+    _TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *viewModel = DYYYCurrentPlayingCommentViewModel();
+    if (!viewModel || ![viewModel respondsToSelector:@selector(pauseVideoIfPlayingWithoutShowingPauseIcon)]) {
+        return;
+    }
+
+    @try {
+        // This native entry owns the comment pause state used by media-preview
+        // parameters. Recovery remains with the original comment lifecycle.
+        [viewModel pauseVideoIfPlayingWithoutShowingPauseIcon];
+        dyyyLastCommentPauseViewModel = viewModel;
+    } @catch (NSException *exception) {
+        NSLog(@"[DYYY][CommentPause] native pause failed on %@: %@", NSStringFromClass([viewModel class]), exception.reason);
+    }
+}
+
+static BOOL DYYYCommentContainerSkipsPanelLifecycle(AWECommentContainerViewController *commentViewController) {
+    if (!commentViewController || ![commentViewController respondsToSelector:@selector(state)]) {
+        return NO;
+    }
+
+    @try {
+        _TtC33AWECommentPanelContainerSwiftImpl31CommentViewControllerStateModel *state = [commentViewController state];
+        if (!state || ![state respondsToSelector:@selector(isSkipCommentPanelLifecycle)]) {
+            return NO;
+        }
+        return [state isSkipCommentPanelLifecycle];
+    } @catch (NSException *exception) {
+        return NO;
+    }
+}
+
+static void DYYYCommentRecoverPlaybackIfNeeded(_TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *viewModel) {
+    if (!viewModel || ![viewModel respondsToSelector:@selector(recoverPlayIfPauseByComment)]) {
+        return;
+    }
+
+    @try {
+        [viewModel recoverPlayIfPauseByComment];
+    } @catch (NSException *exception) {
+        NSLog(@"[DYYY][CommentPause] native recovery failed on %@: %@", NSStringFromClass([viewModel class]), exception.reason);
+    }
+
+    if (dyyyLastCommentPauseViewModel == viewModel) {
+        dyyyLastCommentPauseViewModel = nil;
+    }
+}
+
+static BOOL DYYYCommentPauseOwnsPlayback(void) {
+    return DYYYGetBool(@"DYYYCommentPausePlayback") && dyyyLastCommentPauseViewModel != nil;
+}
+
+%hook AWECommentMediaFeedParams
+
+- (BOOL (^)(void))panelVideoHasPausedByComment {
+    BOOL (^originalBlock)(void) = %orig;
+    if (!DYYYCommentPauseOwnsPlayback()) {
+        return originalBlock;
+    }
+
+    return ^BOOL {
+      if (DYYYCommentPauseOwnsPlayback()) {
+          return YES;
+      }
+      return originalBlock ? originalBlock() : NO;
+    };
+}
+
+- (BOOL (^)(void))fullPanelShouldPreventPlay {
+    BOOL (^originalBlock)(void) = %orig;
+    if (!DYYYCommentPauseOwnsPlayback()) {
+        return originalBlock;
+    }
+
+    return ^BOOL {
+      if (DYYYCommentPauseOwnsPlayback()) {
+          return YES;
+      }
+      return originalBlock ? originalBlock() : NO;
+    };
+}
+
+%end
+
+%hook _TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel
+
+- (instancetype)init {
+    id viewModel = %orig;
+    DYYYRegisterCommentPauseViewModel(viewModel);
+    return viewModel;
+}
+
+- (void)setTabManager:(id)tabManager {
+    %orig(tabManager);
+    DYYYRegisterCommentPauseViewModel(self);
+    if (dyyyCommentViewVisible && DYYYGetBool(@"DYYYCommentPausePlayback")) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          DYYYCommentPausePlaybackIfNeeded();
+        });
+    }
+}
+
+%end
+
+// ---------------------------------------------------------------------
+// ==== VexCove-DYYY 同步新增：查看评论暂停播放（续，注入生命周期） ====
+// ---------------------------------------------------------------------
 %hook AWECommentContainerViewController
+
+- (void)viewWillAppear:(BOOL)animated {
+    %orig(animated);
+    dyyyCommentViewVisible = YES;
+    updateSpeedButtonVisibility();
+    DYYYCommentPausePlaybackIfNeeded();
+}
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     dyyyCommentViewVisible = YES;
     updateSpeedButtonVisibility();
     updateClearButtonVisibility();
+    DYYYCommentPausePlaybackIfNeeded();
     NSString *transparentValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYTopBarTransparent"];
     if (transparentValue && transparentValue.length > 0) {
         CGFloat alphaValue = [transparentValue floatValue];
@@ -11325,10 +11547,24 @@ static Class tabBarButtonClass = nil;
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
+    BOOL skipsPanelLifecycle = DYYYCommentContainerSkipsPanelLifecycle(self);
+    _TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel *pausedViewModel = dyyyLastCommentPauseViewModel;
     %orig;
+
+    // Comment media preview temporarily drives this lifecycle callback while
+    // the comment panel is still active. Mirror the host's lifecycle gate so
+    // opening an image cannot release the comment-owned playback pause.
+    if (skipsPanelLifecycle) {
+        dyyyCommentViewVisible = YES;
+        updateSpeedButtonVisibility();
+        updateClearButtonVisibility();
+        return;
+    }
+
     dyyyCommentViewVisible = NO;
     updateSpeedButtonVisibility();
     updateClearButtonVisibility();
+    DYYYCommentRecoverPlaybackIfNeeded(pausedViewModel);
 }
 
 - (void)viewDidLayoutSubviews {
@@ -13282,6 +13518,485 @@ static void findTargetViewInView(UIView *view) {
             break;
     }
 }
+
+// ---------------------------------------------------------------------
+// ==== VexCove-DYYY 同步新增：作品浏览记录上传拦截（AFD 上报 + 全链路网络兜底） ====
+// ---------------------------------------------------------------------
+// 抖音 39.7.0：作品浏览记录由 AFDPlayerAndInteractionService 上报至
+// /aweme/v1/familiar/video/stats/（scene 常见值 FeedVideoViewedDedicatedStats）
+%hook AFDPlayerAndInteractionService
+
+- (void)statisticsVideoViewedWithID:(NSString *)itemID scene:(NSString *)scene {
+    if ([DYYYPrivacyRecordUploadGuard isAwemeViewRecordUploadDisabled]) {
+        return;
+    }
+
+    %orig;
+}
+
+- (void)statisticsVideoViewedWithID:(NSString *)itemID
+                           authorID:(NSString *)authorID
+                       followStatus:(long long)followStatus
+                     followerStatus:(long long)followerStatus
+                            isStory:(BOOL)isStory
+                  isRequestDirectly:(BOOL)isRequestDirectly
+                              scene:(NSString *)scene {
+    if ([DYYYPrivacyRecordUploadGuard isAwemeViewRecordUploadDisabled]) {
+        return;
+    }
+
+    %orig;
+}
+
+%end
+
+static BOOL DYYYTryBlockPrivacyNetworkRequest(NSString *URLString, id completion) {
+    if (![DYYYPrivacyRecordUploadGuard shouldBlockURLString:URLString]) {
+        return NO;
+    }
+
+    [DYYYPrivacyRecordUploadGuard invokeCancelledCompletionIfPossible:completion];
+    return YES;
+}
+
+%hook AWENetworkService
+
++ (id)postWithURLString:(NSString *)URLString params:(id)params completion:(id)completion {
+    if (DYYYTryBlockPrivacyNetworkRequest(URLString, completion)) {
+        return nil;
+    }
+    return %orig;
+}
+
++ (id)getWithURLString:(NSString *)URLString params:(id)params completion:(id)completion {
+    if (DYYYTryBlockPrivacyNetworkRequest(URLString, completion)) {
+        return nil;
+    }
+    return %orig;
+}
+
++ (id)requestWithURLString:(NSString *)URLString params:(id)params method:(id)method completion:(id)completion {
+    if (DYYYTryBlockPrivacyNetworkRequest(URLString, completion)) {
+        return nil;
+    }
+    return %orig;
+}
+
++ (id)postWithURLString:(NSString *)URLString params:(id)params headerField:(id)headerField completion:(id)completion {
+    if (DYYYTryBlockPrivacyNetworkRequest(URLString, completion)) {
+        return nil;
+    }
+    return %orig;
+}
+
++ (id)getWithURLString:(NSString *)URLString params:(id)params headerField:(id)headerField completion:(id)completion {
+    if (DYYYTryBlockPrivacyNetworkRequest(URLString, completion)) {
+        return nil;
+    }
+    return %orig;
+}
+
+%end
+
+%hook TTNetworkManager
+
+- (id)requestForJSONWithURL:(NSString *)url
+                     params:(id)params
+                     method:(NSString *)method
+           needCommonParams:(BOOL)needCommonParams
+                headerField:(id)headerField
+          requestSerializer:(Class)requestSerializerClass
+         responseSerializer:(Class)responseSerializerClass
+                 autoResume:(BOOL)autoResume
+                   callback:(id)callback {
+    if (DYYYTryBlockPrivacyNetworkRequest(url, callback)) {
+        return nil;
+    }
+    return %orig;
+}
+
+- (id)requestForJSONWithResponse:(NSString *)url
+                          params:(id)params
+                          method:(NSString *)method
+                needCommonParams:(BOOL)needCommonParams
+                     headerField:(id)headerField
+               requestSerializer:(Class)requestSerializerClass
+              responseSerializer:(Class)responseSerializerClass
+                      autoResume:(BOOL)autoResume
+                        callback:(id)callback {
+    if (DYYYTryBlockPrivacyNetworkRequest(url, callback)) {
+        return nil;
+    }
+    return %orig;
+}
+
+- (id)requestForBinaryWithResponse:(NSString *)url
+                            params:(id)params
+                            method:(NSString *)method
+                  needCommonParams:(BOOL)needCommonParams
+                       headerField:(id)headerField
+                          callback:(id)callback {
+    if (DYYYTryBlockPrivacyNetworkRequest(url, callback)) {
+        return nil;
+    }
+    return %orig;
+}
+
+%end
+
+static BOOL DYYYShouldSkipPrivacyRecordTaskStart(id task) {
+    BOOL shouldBlock = [DYYYPrivacyRecordUploadGuard isTaskMarkedForBlocking:task] ||
+                       [DYYYPrivacyRecordUploadGuard shouldBlockRequestObject:task];
+    if (!shouldBlock) {
+        return NO;
+    }
+
+    // 即使任务对象不支持 cancel，也必须阻止原始启动，避免隐私请求继续发出。
+    (void)[DYYYPrivacyRecordUploadGuard cancelTaskIfPossible:task];
+    return YES;
+}
+
+%hook TTHttpTask
+
+- (void)resume {
+    if (DYYYShouldSkipPrivacyRecordTaskStart(self)) {
+        return;
+    }
+
+    %orig;
+}
+
+%end
+
+%hook TTHttpTaskChromium
+
+- (void)runRequestFiltersAndStart {
+    if (DYYYShouldSkipPrivacyRecordTaskStart(self)) {
+        return;
+    }
+
+    %orig;
+}
+
+- (void)resume {
+    if (DYYYShouldSkipPrivacyRecordTaskStart(self)) {
+        return;
+    }
+
+    %orig;
+}
+
+%end
+
+%hook TTConcurrentHttpTask
+
+- (void)resume {
+    if (DYYYShouldSkipPrivacyRecordTaskStart(self)) {
+        return;
+    }
+
+    %orig;
+}
+
+%end
+
+%hook NSURLSessionTask
+
+- (void)resume {
+    if (DYYYShouldSkipPrivacyRecordTaskStart(self)) {
+        return;
+    }
+
+    %orig;
+}
+
+%end
+
+%hook NSURLSession
+
+- (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url {
+    NSURLSessionDataTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:url];
+    return task;
+}
+
+- (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url completionHandler:(void (^)(NSData *data, NSURLResponse *response, NSError *error))completionHandler {
+    NSURLSessionDataTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:url];
+    return task;
+}
+
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request {
+    NSURLSessionDataTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *data, NSURLResponse *response, NSError *error))completionHandler {
+    NSURLSessionDataTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionDownloadTask *)downloadTaskWithURL:(NSURL *)url {
+    NSURLSessionDownloadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:url];
+    return task;
+}
+
+- (NSURLSessionDownloadTask *)downloadTaskWithURL:(NSURL *)url completionHandler:(void (^)(NSURL *location, NSURLResponse *response, NSError *error))completionHandler {
+    NSURLSessionDownloadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:url];
+    return task;
+}
+
+- (NSURLSessionDownloadTask *)downloadTaskWithRequest:(NSURLRequest *)request {
+    NSURLSessionDownloadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionDownloadTask *)downloadTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSURL *location, NSURLResponse *response, NSError *error))completionHandler {
+    NSURLSessionDownloadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionUploadTask *)uploadTaskWithRequest:(NSURLRequest *)request fromData:(NSData *)bodyData {
+    NSURLSessionUploadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionUploadTask *)uploadTaskWithRequest:(NSURLRequest *)request fromData:(NSData *)bodyData completionHandler:(void (^)(NSData *data, NSURLResponse *response, NSError *error))completionHandler {
+    NSURLSessionUploadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionUploadTask *)uploadTaskWithRequest:(NSURLRequest *)request fromFile:(NSURL *)fileURL {
+    NSURLSessionUploadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionUploadTask *)uploadTaskWithRequest:(NSURLRequest *)request fromFile:(NSURL *)fileURL completionHandler:(void (^)(NSData *data, NSURLResponse *response, NSError *error))completionHandler {
+    NSURLSessionUploadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+- (NSURLSessionUploadTask *)uploadTaskWithStreamedRequest:(NSURLRequest *)request {
+    NSURLSessionUploadTask *task = %orig;
+    [DYYYPrivacyRecordUploadGuard markTaskForBlockingIfNeeded:task requestObject:request];
+    return task;
+}
+
+%end
+
+// ---------------------------------------------------------------------
+// ==== VexCove-DYYY 同步新增：隐藏文案下推荐应用下载横幅 ====
+// ---------------------------------------------------------------------
+static void DYYYRemoveRecommendAppDownloadView(id viewObject) {
+    if (![viewObject isKindOfClass:[UIView class]]) {
+        return;
+    }
+    UIView *view = (UIView *)viewObject;
+    view.hidden = YES;
+    [view removeFromSuperview];
+}
+
+static void DYYYHideRecommendAppDownloadViewForOwner(id owner) {
+    id addFeedMusicView = DYYYKVCValueIfPossible(owner, @"addFeedMusicView");
+    DYYYRemoveRecommendAppDownloadView(addFeedMusicView);
+    DYYYSetKVCValueIfPossible(owner, @"addFeedMusicView", nil);
+}
+
+// 抖音精选的应用推荐使用独立 Lynx 底栏。只在其自身的
+// canShow/update/add 入口阻断，不移除 feed 容器。
+static void DYYYHideDouYinSelectAppGuideViews(id owner) {
+    DYYYRemoveRecommendAppDownloadView(DYYYIvarValueIfPossible(owner, "_appGuideView"));
+    DYYYRemoveRecommendAppDownloadView(DYYYIvarValueIfPossible(owner, "_appGuideContainer"));
+}
+
+%hook AWEPlayInteractionMusicAiRefactorListenFeedController
+
+- (BOOL)shouldShowAddFeedMusicView {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        return NO;
+    }
+    return %orig;
+}
+
+- (void)showFeedMusicViewIfNeeded {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYHideRecommendAppDownloadViewForOwner(self);
+        return;
+    }
+    %orig;
+}
+
+- (void)setAddFeedMusicView:(UIView *)view {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        if ([view isKindOfClass:[UIView class]]) {
+            view.hidden = YES;
+            [view removeFromSuperview];
+        }
+        %orig(nil);
+        return;
+    }
+    %orig;
+}
+
+- (void)updateAddFeedMusicViewLayoutWithShowSpeedControl:(BOOL)showSpeedControl {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYHideRecommendAppDownloadViewForOwner(self);
+        return;
+    }
+    %orig;
+}
+
+%end
+
+// 39.3.0 的应用推荐已改走通用 Diversion Bar。该视图只承载
+// pkgInfo/appMarket/downloadIntermediatePage 类应用引流，隐藏它不会删除作品文案或普通音乐信息。
+%hook AWEPlayInteractionDiversionBar
+
+- (void)layoutSubviews {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYRemoveRecommendAppDownloadView(self);
+        return;
+    }
+    %orig;
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYRemoveRecommendAppDownloadView(self);
+    }
+}
+
+%end
+
+%hook AWEPlayInteractionNewDiversionBarBottomElement
+
+- (void)setDiversionBarView:(AWEPlayInteractionDiversionBar *)view {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYRemoveRecommendAppDownloadView(view);
+        %orig(nil);
+        return;
+    }
+    %orig;
+}
+
+%end
+
+%hook AWEDouYinSelectUGBottomBarController
+
+- (BOOL)canShowBottomBarForAweme:(id)aweme {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        return NO;
+    }
+    return %orig;
+}
+
+- (void)updateBottomBarWithAweme:(id)aweme updateTiming:(BOOL)updateTiming {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYHideDouYinSelectAppGuideViews(self);
+        return;
+    }
+    %orig;
+}
+
+- (void)bottomBarAddedToContainer:(id)container {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYHideDouYinSelectAppGuideViews(self);
+        return;
+    }
+    %orig;
+}
+
+- (void)setAppGuideView:(UIView *)view {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYRemoveRecommendAppDownloadView(view);
+        %orig(nil);
+        return;
+    }
+    %orig;
+}
+
+- (void)setAppGuideContainer:(UIView *)view {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        DYYYRemoveRecommendAppDownloadView(view);
+        %orig(nil);
+        return;
+    }
+    %orig;
+}
+
+%end
+
+%hook AWEFeedMeetMusicView
+
+- (void)layoutSubviews {
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        UIView *view = (UIView *)self;
+        view.hidden = YES;
+        [view removeFromSuperview];
+        return;
+    }
+    %orig;
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    if (DYYYGetBool(@"DYYYHideRecommendAppDownload")) {
+        UIView *view = (UIView *)self;
+        view.hidden = YES;
+        [view removeFromSuperview];
+    }
+}
+
+%end
+
+// ---------------------------------------------------------------------
+// ==== VexCove-DYYY 同步新增：隐藏直播间分享面板直播伴侣提示 ====
+// ---------------------------------------------------------------------
+%hook IESLiveFlowGuidanceFragment
+
++ (BOOL)componentShouldActive:(id)attacher {
+    if (DYYYGetBool(@"DYYYHideLiveRoomShareCompanion")) {
+        return NO;
+    }
+    return %orig;
+}
+
+%end
+
+%hook IESLiveFlowGuidanceAdView
+
+- (void)layoutSubviews {
+    if (DYYYGetBool(@"DYYYHideLiveRoomShareCompanion")) {
+        self.hidden = YES;
+        [self removeFromSuperview];
+        return;
+    }
+    %orig;
+}
+
+- (void)didMoveToSuperview {
+    if (DYYYGetBool(@"DYYYHideLiveRoomShareCompanion")) {
+        if (self.superview) {
+            self.hidden = YES;
+            [self removeFromSuperview];
+        }
+        return;
+    }
+    %orig;
+}
+
+%end
 
 // ---------------------------------------------------------------------
 // %ctor —— 插件初始化区（进程注入后最先执行的代码）
