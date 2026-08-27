@@ -2868,6 +2868,11 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 // InteractionBaseLabel"），Logos 的 %hook 不能直接用点号类名，
 // 所以在 %ctor 里用 objc_getClass 拿到类后映射成下划线别名（见 13095 行）。
 %group DYYYCommentExactTimeGroup
+// setText 记录最近一次文本；setFrame 时 Swift label 的 text 属性可能为 nil，
+// 用这个关联对象 key 兜底取回（见 setFrame）。
+// 必须是文件级（组级）变量：setText 与 setFrame 两个 hook 共用同一 key，
+// 关联对象只有 key 地址相同才能取到值；声明成方法内 static 就各自独立了。
+static char kDYYYCommentLabelLastTextKey;
 %hook AWECommentSwiftBizUI_CommentInteractionBaseLabel
 
 - (void)setText:(NSString *)text {
@@ -2880,6 +2885,12 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
     UILabel *label = (UILabel *)self;
     if (!text || text.length == 0) return;
 
+    // 记录最近一次文本：Swift label 的 text 属性在 setFrame 时可能返回 nil（见下方 setFrame 的
+    // 三级兜底），所以每次 setText 拿到可靠参数时顺手存一份。
+    // 用关联对象（associated object）而不是给类加 ivar：被 hook 的是 Swift 类，
+    // 无法声明自己的成员变量，%new 添加 ivar 也不稳定；key 用指针地址保证唯一。
+    objc_setAssociatedObject(self, &kDYYYCommentLabelLastTextKey, text, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
     // --- 1. 拦截翻译文本，将其绝对定位在屏幕右侧 100 像素 ---
     if ([text isEqualToString:@"翻译"] || [text isEqualToString:@"隐藏翻译"]) {
         CGRect currentFrame = label.frame;
@@ -2888,6 +2899,16 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
         currentFrame.origin.x = screenWidth - 100.0 - currentFrame.size.width;
         label.frame = currentFrame;
         return;
+    }
+
+    // --- 1.5 分享文本右移：完整时间加宽后行尾"分享"被顶到贴脸/叠影 ---
+    // setText 在宿主每次赋值时都会执行，这里立即把 x 右移 36pt；
+    // setFrame 里还有同款兜底（每次布局重算），双通道保证命中。
+    if ([text isEqualToString:@"分享"]) {
+        CGRect currentFrame = label.frame;
+        currentFrame.origin.x += 36.0; // 右移量与 setFrame 兜底分支一致
+        label.frame = currentFrame;
+        return; // 分享不参与后面的时间加宽逻辑，直接返回
     }
 
     // --- 2. 拦截时间文本，如果不够宽则扩充宽度 ---
@@ -2927,7 +2948,25 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
     }
 
     UILabel *label = (UILabel *)self;
+    // 本类是 Swift 类：text 属性可能为 nil（显示内容在 attributedText 或内部存储里，
+    // 且宿主对 label 复用时属性不一定同步），因此按优先级三级兜底取回文本：
+    //   ① label.text            —— 常规路径，多数情况直接命中
+    //   ② attributedText.string —— Swift label 常见：内容走富文本
+    //   ③ setText 时记录的关联对象 —— ①②都拿不到时的最后保底（只可能落后一次赋值）
+    // 注意：只读取不修改宿主状态，取不到文本就跳过本次布局，不影响宿主原有排版。
     NSString *text = label.text;
+    if ((!text || text.length == 0) && [label respondsToSelector:@selector(attributedText)]) {
+        NSAttributedString *attr = label.attributedText;
+        if (attr && attr.length > 0) {
+            text = attr.string;
+        }
+    }
+    if (!text || text.length == 0) {
+        NSObject *last = objc_getAssociatedObject(self, &kDYYYCommentLabelLastTextKey);
+        if ([last isKindOfClass:[NSString class]] && ((NSString *)last).length > 0) {
+            text = (NSString *)last;
+        }
+    }
 
     if (text && text.length > 0) {
         // --- 1. 拦截翻译文本，将其绝对定位在屏幕右侧 100 像素 ---
@@ -2937,7 +2976,9 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
         }
         // --- 1.5 分享文本：右移，与加宽后的完整时间文本拉开间距 ---
         // 【A 修复】完整时间（yyyy-MM-dd HH:mm:ss）加宽后行尾"分享"被顶到贴脸叠影，
-        // 每次宿主布局时把分享 x 坐标右移 12pt（在时间文本右侧留出视觉间隙）。
+        // 每次宿主布局时把分享 x 坐标右移 36pt（在时间文本右侧留出视觉间隙）。
+        // 兜底通道：setText 里已把 x 右移过一遍，这里每次宿主重排再右移一次，
+        // 因为宿主 setFrame 会用自己的计算值还原坐标——两处位置与偏移量必须保持一致。
         else if ([text isEqualToString:@"分享"]) {
             frame.origin.x += 36.0;
         }
