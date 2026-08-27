@@ -2902,11 +2902,11 @@ static char kDYYYCommentLabelLastTextKey;
     }
 
     // --- 1.5 分享文本右移：完整时间加宽后行尾"分享"被顶到贴脸/叠影 ---
-    // setText 在宿主每次赋值时都会执行，这里立即把 x 右移 36pt；
+    // setText 在宿主每次赋值时都会执行，这里立即把 x 右移 12pt；
     // setFrame 里还有同款兜底（每次布局重算），双通道保证命中。
     if ([text isEqualToString:@"分享"]) {
         CGRect currentFrame = label.frame;
-        currentFrame.origin.x += 36.0; // 右移量与 setFrame 兜底分支一致
+        currentFrame.origin.x += 12.0; // 右移量与 setFrame 兜底分支一致
         label.frame = currentFrame;
         return; // 分享不参与后面的时间加宽逻辑，直接返回
     }
@@ -2976,11 +2976,11 @@ static char kDYYYCommentLabelLastTextKey;
         }
         // --- 1.5 分享文本：右移，与加宽后的完整时间文本拉开间距 ---
         // 【A 修复】完整时间（yyyy-MM-dd HH:mm:ss）加宽后行尾"分享"被顶到贴脸叠影，
-        // 每次宿主布局时把分享 x 坐标右移 36pt（在时间文本右侧留出视觉间隙）。
+        // 每次宿主布局时把分享 x 坐标右移 12pt（在时间文本右侧留出视觉间隙）。
         // 兜底通道：setText 里已把 x 右移过一遍，这里每次宿主重排再右移一次，
         // 因为宿主 setFrame 会用自己的计算值还原坐标——两处位置与偏移量必须保持一致。
         else if ([text isEqualToString:@"分享"]) {
-            frame.origin.x += 36.0;
+            frame.origin.x += 12.0;
         }
         // --- 2. 拦截时间文本，如果不够宽则扩充宽度 ---
         else if ([self respondsToSelector:@selector(font)]) {
