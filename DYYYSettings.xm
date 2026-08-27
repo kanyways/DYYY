@@ -1222,6 +1222,17 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
             @"detail" : @"",
             @"cellType" : @37,
             @"imageName" : kDYYYFeedNowPlayingSVGIconName},
+          @{@"identifier" : @"DYYYEnableHighFPS",
+            @"title" : @"开启最高可用帧率",
+            @"subTitle" : @"开启后使用设备最高可用帧率，负载过重时会自动降档；可能增加耗电，按需开启。",
+            @"detail" : @"",
+            @"cellType" : @37,
+            @"imageName" : @"ic_speed_outlined_20"},
+          @{@"identifier" : @"DYYYShowFPSOverlay",
+            @"title" : @"实时帧率显示",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_clock_outlined_20"},
           @{@"identifier" : @"DYYYEnableVideoHighestQuality",
             @"title" : @"提高视频画质",
             @"detail" : @"",
@@ -2001,6 +2012,21 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
             @"title" : @"隐藏我的页发作品",
             @"detail" : @"",
             @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHideMessageTabStarMall",
+            @"title" : @"隐藏消息星光商城",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHideMineAvatarPlus",
+            @"title" : @"隐藏我的页头像加号",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHideMineAICreation",
+            @"title" : @"隐藏我的创作AI作品",
+            @"detail" : @"",
+            @"cellType" : @6,
             @"imageName" : @"ic_eyeslash_outlined_16"}
       ];
       for (NSDictionary *dict in messageAndMineSettings) {
@@ -2764,6 +2790,13 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
       // 【媒体保存】分类
       NSMutableArray<AWESettingItemModel *> *downloadItems = [NSMutableArray array];
       NSArray *downloadSettings = @[
+          @{
+              @"identifier" : @"DYYYAlbumMediaDescription",
+              @"title" : @"保存作品信息",
+              @"detail" : @"",
+              @"cellType" : @6,
+              @"imageName" : @"ic_cloudarrowdown_outlined_20"
+          },
           @{
               @"identifier" : @"DYYYInterfaceDownload",
               @"title" : @"接口解析保存媒体",

@@ -1259,6 +1259,42 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     return YES;
 }
 
++ (UIColor *)douyinColorNamed:(NSString *)colorName fallbackColor:(UIColor *)fallbackColor {
+    if (colorName.length == 0) {
+        return fallbackColor;
+    }
+
+    Class colorClass = NSClassFromString(@"AWEUIColor");
+    SEL colorNamedSEL = NSSelectorFromString(@"colorNamed:");
+    if (colorClass && [colorClass respondsToSelector:colorNamedSEL]) {
+        @try {
+            id color = ((id(*)(id, SEL, id))objc_msgSend)(colorClass, colorNamedSEL, colorName);
+            if ([color isKindOfClass:[UIColor class]]) {
+                return color;
+            }
+        } @catch (NSException *exception) {
+        }
+    }
+
+    return fallbackColor;
+}
+
++ (UIColor *)douyinInteractiveControlBackgroundColor {
+    UIColor *fallbackColor =
+        [self usesDouyinLightBackground] ? [UIColor colorWithRed:22.0 / 255.0 green:24.0 / 255.0 blue:35.0 / 255.0 alpha:8.0 / 255.0] : [UIColor colorWithWhite:1.0 alpha:15.0 / 255.0];
+    return [self douyinColorNamed:@"BGCard2" fallbackColor:fallbackColor];
+}
+
++ (UIColor *)douyinPanelBackgroundColor {
+    UIColor *fallbackColor = [self usesDouyinLightBackground] ? [UIColor whiteColor] : [UIColor colorWithWhite:38.0 / 255.0 alpha:1.0];
+    return [self douyinColorNamed:@"BGPanelTint" fallbackColor:fallbackColor];
+}
+
++ (UIColor *)douyinSeparatorColor {
+    UIColor *fallbackColor = [self usesDouyinLightBackground] ? [UIColor colorWithWhite:22.0 / 255.0 alpha:20.0 / 255.0] : [UIColor colorWithWhite:1.0 alpha:20.0 / 255.0];
+    return [self douyinColorNamed:@"LineSecondary" fallbackColor:fallbackColor];
+}
+
 + (BOOL)isDarkMode {
     if (![self usesDouyinLightBackground]) {
         return YES;

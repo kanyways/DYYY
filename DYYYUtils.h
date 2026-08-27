@@ -118,6 +118,20 @@ NS_ASSUME_NONNULL_BEGIN
  */
 + (BOOL)usesDouyinLightBackground;
 
+/**
+ * 读取抖音宿主颜色（AWEUIColor colorNamed:），宿主不存在时返回 fallback
+ */
++ (UIColor *)douyinColorNamed:(NSString *)colorName fallbackColor:(UIColor *)fallbackColor;
+
+/** 抖音面板背景色（BGPanelTint） */
++ (UIColor *)douyinPanelBackgroundColor;
+
+/** 抖音分隔线颜色（LineSecondary） */
++ (UIColor *)douyinSeparatorColor;
+
+/** 抖音交互控件背景色（BGCard2） */
++ (UIColor *)douyinInteractiveControlBackgroundColor;
+
 #pragma mark - Public File Management (公共文件管理)
 
 /**格式化大小

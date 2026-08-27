@@ -14020,6 +14020,9 @@ static void DYYYHideDouYinSelectAppGuideViews(id owner) {
     DYYYMigrateCombinedHDRModeIfNeeded();
     DYYYMigrateNotificationBlurTransparencyIfNeeded();
 
+    // VexCove-DYYY 同步：性能高帧率模块（B 的 LoaderSafe 相位，与用户协议无关）
+    DYYYStartHighFPSHooks();
+
     Class interactionBaseLabelClass = objc_getClass("AWECommentSwiftBizUI.CommentInteractionBaseLabel");
     if (interactionBaseLabelClass) {
         %init(DYYYCommentExactTimeGroup, AWECommentSwiftBizUI_CommentInteractionBaseLabel = interactionBaseLabelClass);
@@ -14045,6 +14048,11 @@ static void DYYYHideDouYinSelectAppGuideViews(id owner) {
         %init(DYYYSettingsGesture);
     }
     if (DYYYGetBool(@"DYYYUserAgreementAccepted")) {
+        // VexCove-DYYY 同步：帧率浮窗 / 互动数全显 / 消息页与我的页隐藏模块（B 的 AfterAgreement 相位）
+        DYYYStartFPSOverlay();
+        DYYYStartExactInteractionCountHooks();
+        DYYYStartHideMessageAndMinePageHooks();
+
         static dispatch_once_t onceToken;
         dispatch_once(&onceToken, ^{
           Class wSwiftImpl = objc_getClass("AWECommentInputViewSwiftImpl.CommentInputContainerView");
