@@ -72,6 +72,7 @@ static const NSTimeInterval kDYYYUtilsDefaultFrameDelay = 0.1f;
 // 失效时机有两个：NSUserDefaultsDidChangeNotification（跨进程同步），
 // 以及 DYYYSettingsHelper.setUserDefaults（面板写入）显式清缓存。
 static NSMutableDictionary<NSString *, id> *s_settingsCache = nil;
+static BOOL s_settingsObserverScheduled = NO;
 
 // ==== 日志区块 ====
 // DYYYNSLog 是插件自己的日志函数：一条日志同时发给 os_log（macOS 的 Console.app
@@ -493,12 +494,22 @@ static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
 + (id)fastSettingValueForKey:(NSString *)key {
     if (!s_settingsCache) {
         s_settingsCache = [NSMutableDictionary dictionary];
-        [[NSNotificationCenter defaultCenter] addObserverForName:NSUserDefaultsDidChangeNotification
-                                                          object:nil
-                                                           queue:nil
-                                                      usingBlock:^(NSNotification *_Nonnull note) {
-                                                        s_settingsCache = nil;
-                                                      }];
+        // 观察者注册延后到启动完成后：iOS 15.4.1 上启动早期（首个 setFrame
+        // 热路径触发）注册 NSUserDefaultsDidChangeNotification 会把 CF 通知
+        // 注册器写坏（SIGBUS），表现为后续任何观察者注册/通知派发崩溃。
+        // setUserDefaults 写路径已调用 invalidateSettingsCache，跨进程同步
+        // 等启动后 2 秒再接管。
+        if (!s_settingsObserverScheduled) {
+            s_settingsObserverScheduled = YES;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+              [[NSNotificationCenter defaultCenter] addObserverForName:NSUserDefaultsDidChangeNotification
+                                                                object:nil
+                                                                 queue:nil
+                                                            usingBlock:^(NSNotification *_Nonnull note) {
+                                                              s_settingsCache = nil;
+                                                            }];
+            });
+        }
     }
     id cached = s_settingsCache[key];
     if (cached) {
