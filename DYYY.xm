@@ -29,6 +29,10 @@
 #import "DYYYSettingViewController.h"
 #import "DYYYToast.h"
 #import "DYYYUtils.h"
+#import "DYYYHighFPSHooks.h"
+#import "DYYYFPSOverlay.h"
+#import "DYYYExactInteractionCountHooks.h"
+#import "DYYYHideMessageAndMinePageHooks.h"
 
 // =====================================================================
 // DYYY.xm —— 插件主入口（Theos / Logos 工程）

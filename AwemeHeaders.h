@@ -144,6 +144,7 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @property(nonatomic, assign) BOOL isAds;
 @property(nonatomic, assign) BOOL isLive;
 @property(nonatomic, assign) BOOL isLivePhoto;
+@property(nonatomic, assign) BOOL isFamiliarItem;
 @property(nonatomic, assign) BOOL isNewTextMode;  // 文字图文专有属性
 @property(nonatomic, strong) NSString *shareURL;
 @property(nonatomic, strong) id hotSpotLynxCardModel;
@@ -1977,4 +1978,8 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 
 // 顶栏选中指示线
 @interface AWEFeedMultiTabSelectedContainerView : UIView
+@end
+
+// 直播关注转发引导广告位
+@interface IESLiveFlowGuidanceAdView : UIView
 @end
