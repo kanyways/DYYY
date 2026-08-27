@@ -2851,10 +2851,7 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
         
         NSDate *date = [NSDate dateWithTimeIntervalSince1970:ts];
         NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-        // 【A 修复】格式收紧为 "MM-dd HH:mm"（去年去秒）：完整年份+秒（19 字符）会把
-        // 行尾"分享"按钮顶到贴脸/叠影（用户反馈"分享盖住"）。该宽度接近原生"x分钟前"
-        // 的宽度，行内布局不再被推挤；年份/秒在评论区上下文中没有区分度。
-        [formatter setDateFormat:@"MM-dd HH:mm"];
+        [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
         NSString *formattedDate = [formatter stringFromDate:date];
         
         NSString *newText = [NSString stringWithFormat:@"%@%@", formattedDate, suffix];
@@ -2937,7 +2934,13 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
         if ([text isEqualToString:@"翻译"] || [text isEqualToString:@"隐藏翻译"]) {
             CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
             frame.origin.x = screenWidth - 100.0 - frame.size.width;
-        } 
+        }
+        // --- 1.5 分享文本：右移，与加宽后的完整时间文本拉开间距 ---
+        // 【A 修复】完整时间（yyyy-MM-dd HH:mm:ss）加宽后行尾"分享"被顶到贴脸叠影，
+        // 每次宿主布局时把分享 x 坐标右移 12pt（在时间文本右侧留出视觉间隙）。
+        else if ([text isEqualToString:@"分享"]) {
+            frame.origin.x += 36.0;
+        }
         // --- 2. 拦截时间文本，如果不够宽则扩充宽度 ---
         else if ([self respondsToSelector:@selector(font)]) {
             UIFont *font = label.font;
@@ -2995,10 +2998,7 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
         
         NSDate *date = [NSDate dateWithTimeIntervalSince1970:ts];
         NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-        // 【A 修复】格式收紧为 "MM-dd HH:mm"（去年去秒）：完整年份+秒（19 字符）会把
-        // 行尾"分享"按钮顶到贴脸/叠影（用户反馈"分享盖住"）。该宽度接近原生"x分钟前"
-        // 的宽度，行内布局不再被推挤；年份/秒在评论区上下文中没有区分度。
-        [formatter setDateFormat:@"MM-dd HH:mm"];
+        [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
         NSString *formattedDate = [formatter stringFromDate:date];
         
         NSMutableAttributedString *newAttrStr = [attributedText mutableCopy];
