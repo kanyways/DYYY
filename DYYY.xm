@@ -2842,13 +2842,22 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
     if (match) {
         NSString *rawTs = [text substringWithRange:[match rangeAtIndex:1]];
         NSString *suffix = [text substringWithRange:[match rangeAtIndex:2]];
-        
+
         long long ts = [rawTs longLongValue];
-        
+
         if (ts > 100000000000) {
             ts = ts / 1000;
         }
-        
+
+        // 时间窗口过滤：评论时间戳不可能早于 2001-09-09（1e9s）或晚于当前时刻+1 天；
+        // 主页昵称/签名里的纯数字（如抖音号 70014387168 按秒级时间戳会得到 4188-09-01）
+        // 会被误转成荒谬日期，命中窗口外一律原样显示。
+        NSTimeInterval epochNow = [NSDate date].timeIntervalSince1970;
+        if (ts < 1000000000LL || (double)ts > epochNow + 86400.0) {
+            %orig(text);
+            return;
+        }
+
         NSDate *date = [NSDate dateWithTimeIntervalSince1970:ts];
         NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
         [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
@@ -3032,11 +3041,19 @@ static char kDYYYCommentLabelLastTextKey;
     if (match) {
         NSString *rawTs = [plainText substringWithRange:[match rangeAtIndex:1]];
         long long ts = [rawTs longLongValue];
-        
+
         if (ts > 100000000000) {
             ts = ts / 1000;
         }
-        
+
+        // 时间窗口过滤（同 AWERLVirtualLabel setText）：纯数字文本只有落在
+        // 2001-09-09 ~ 当前+1天 内才解释为时间戳，避免主页昵称/签名数字误转成未来日期。
+        NSTimeInterval epochNow = [NSDate date].timeIntervalSince1970;
+        if (ts < 1000000000LL || (double)ts > epochNow + 86400.0) {
+            %orig(attributedText);
+            return;
+        }
+
         NSDate *date = [NSDate dateWithTimeIntervalSince1970:ts];
         NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
         [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
