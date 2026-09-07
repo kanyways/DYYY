@@ -58,6 +58,7 @@
 1. **所有新增的抖音类/方法声明必须写入 `AwemeHeaders.h`**，保持集中管理，避免在其他文件里散落声明。
 2. 自定义 `UIView` Category 或辅助宏同样放在 `AwemeHeaders.h`，必要时按功能分段并维持已有注释风格。
 3. 外部库统一通过已有 `AwemeHeaders.h` 或对应 `.h` 引入，避免重复 import。
+4. **版本敏感类名一律走 `DYYYVersionAdapter`**：代码里不要散落 `NSClassFromString(@"...")` 硬编码，改用 `[DYYYVersionAdapter classForRole:@"角色名"]`；候选类名集中维护在 `DYYYVersionAdapter.m` 的候选字典（新版本优先）。抖音升级改类名时只改这张候选表，并靠 `classForRole:` 的"版本漂移日志"定位是哪个角色断了。
 
 ### 2. 类与函数组织
 1. 项目内业务类一律使用 `DYYY` 前缀，并拆分 `.h/.m`；Logos Hook 保持在 `.xm` 文件。
@@ -103,6 +104,7 @@
 - 是否确保弱引用/通知/定时器释放（`AWMSafeDispatchTimer` 用于延时场景）。
 - 所有新增抖音类声明已写入 `AwemeHeaders.h`。
 - **每个 `%new` 方法都已在 `AwemeHeaders.h` 对应类里声明**（否则 `%hook` 内调用会编译失败）。
+- **版本敏感的类名已纳入 `DYYYVersionAdapter` 候选表，未直接在代码里 `NSClassFromString` 硬编码**。
 - 是否在对应类/文件中添加函数，并补充必要头文件 import。
 
 ## 常见工作流示例
