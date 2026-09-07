@@ -3259,7 +3259,6 @@ static char kDYYYCommentLabelLastTextKey;
 
 %hook AWEPlayInteractionUserAvatarElement
 - (void)onFollowViewClicked:(UITapGestureRecognizer *)gesture {
-    NSLog(@"[DYYY] follow hook fired：%@ DYYYFollowTips=%d", NSStringFromClass(self.class), DYYYGetBool(@"DYYYFollowTips"));
     if (DYYYGetBool(@"DYYYFollowTips")) {
         // 获取用户信息
         AWEUserModel *author = nil;
@@ -3320,7 +3319,6 @@ static char kDYYYCommentLabelLastTextKey;
 
 %hook AWEPlayInteractionUserAvatarFollowController
 - (void)onFollowViewClicked:(UITapGestureRecognizer *)gesture {
-    NSLog(@"[DYYY] follow hook fired：%@ DYYYFollowTips=%d", NSStringFromClass(self.class), DYYYGetBool(@"DYYYFollowTips"));
     if (DYYYGetBool(@"DYYYFollowTips")) {
         // 获取用户信息
         AWEUserModel *author = nil;
@@ -10795,7 +10793,6 @@ static NSHashTable *processedParentViews = nil;
 
 %hook AWEPlayInteractionUserAvatarFollowPromptController
 - (void)onFollowViewClicked:(UITapGestureRecognizer *)gesture {
-    NSLog(@"[DYYY] follow hook fired：%@ DYYYFollowTips=%d", NSStringFromClass(self.class), DYYYGetBool(@"DYYYFollowTips"));
     if (DYYYGetBool(@"DYYYHideFollowPromptView")) {
         return;
     }
