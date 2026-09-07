@@ -93,11 +93,33 @@
     }
 
     UIViewController *topVC = [DYYYUtils topView];
-    if (topVC && [vc respondsToSelector:@selector(presentOnViewController:)] && ![topVC isBeingPresented] && ![topVC isBeingDismissed]) {
-        [vc presentOnViewController:topVC];
-    } else {
+    if (!topVC || ![vc respondsToSelector:@selector(presentOnViewController:)]) {
+        // 用户设备未越狱，读不到运行期日志；这里用屏幕 Toast 直观呈现失败原因，
+        // 避免“无弹窗但无声无息”，便于在设备上直接判断。
+        [DYYYUtils showToast:[NSString stringWithFormat:@"关注确认弹窗失败：topVC=%@ presentSel=%d",
+                                                        topVC ? NSStringFromClass(topVC.class) : @"nil",
+                                                        [vc respondsToSelector:@selector(presentOnViewController:)] ? 1 : 0]];
         return nil;
     }
+
+    // 若顶控制器正处在转场中（isBeingPresented/isBeingDismissed），立即 present 可能被
+    // UIKit 拒绝（"Attempt to present ... while a presentation is in progress"）。
+    // 稍候在转场结束后重试；重试几次仍不行才用 Toast 兜底报告。
+    __block int retries = 0;
+    void (^tryPresent)(void) = ^{
+        if (![topVC isBeingPresented] && ![topVC isBeingDismissed]) {
+            [vc presentOnViewController:topVC];
+            return;
+        }
+        if (++retries < 4) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), tryPresent);
+        } else {
+            [DYYYUtils showToast:[NSString stringWithFormat:@"关注确认弹窗失败：顶栏转场中 topVC=%@",
+                                                            NSStringFromClass(topVC.class)]];
+        }
+    };
+    tryPresent();
+    return vc;
 
     return vc;
 }

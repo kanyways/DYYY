@@ -3259,6 +3259,7 @@ static char kDYYYCommentLabelLastTextKey;
 
 %hook AWEPlayInteractionUserAvatarElement
 - (void)onFollowViewClicked:(UITapGestureRecognizer *)gesture {
+    NSLog(@"[DYYY] follow hook fired：%@ DYYYFollowTips=%d", NSStringFromClass(self.class), DYYYGetBool(@"DYYYFollowTips"));
     if (DYYYGetBool(@"DYYYFollowTips")) {
         // 获取用户信息
         AWEUserModel *author = nil;
@@ -3319,6 +3320,7 @@ static char kDYYYCommentLabelLastTextKey;
 
 %hook AWEPlayInteractionUserAvatarFollowController
 - (void)onFollowViewClicked:(UITapGestureRecognizer *)gesture {
+    NSLog(@"[DYYY] follow hook fired：%@ DYYYFollowTips=%d", NSStringFromClass(self.class), DYYYGetBool(@"DYYYFollowTips"));
     if (DYYYGetBool(@"DYYYFollowTips")) {
         // 获取用户信息
         AWEUserModel *author = nil;
@@ -3600,6 +3602,14 @@ static char kDYYYCommentLabelLastTextKey;
 
 %hook AWEBaseListViewController
 - (void)viewDidLayoutSubviews {
+    %orig;
+    [self applyBlurEffectIfNeeded];
+}
+
+// 评论面板毛玻璃再兜底：第三方 tweak（AWECommentAudioTweak）会在评论容器
+// 派生类上用 class_addMethod 覆盖 viewDidLayoutSubviews，使本 hook 被遮蔽而
+// 不执行。viewWillAppear 是它没碰过的触发点，这里补一次，保证透明仍会套上。
+- (void)viewWillAppear:(BOOL)animated {
     %orig;
     [self applyBlurEffectIfNeeded];
 }
@@ -10785,6 +10795,7 @@ static NSHashTable *processedParentViews = nil;
 
 %hook AWEPlayInteractionUserAvatarFollowPromptController
 - (void)onFollowViewClicked:(UITapGestureRecognizer *)gesture {
+    NSLog(@"[DYYY] follow hook fired：%@ DYYYFollowTips=%d", NSStringFromClass(self.class), DYYYGetBool(@"DYYYFollowTips"));
     if (DYYYGetBool(@"DYYYHideFollowPromptView")) {
         return;
     }
@@ -12516,6 +12527,15 @@ static BOOL DYYYCommentPauseOwnsPlayback(void) {
     dyyyCommentViewVisible = YES;
     updateSpeedButtonVisibility();
     DYYYCommentPausePlaybackIfNeeded();
+    // 毛玻璃兜底触发点（见 dyyy_applyCommentPanelBlur 注释）：viewWillAppear 不被
+    // 第三方 tweak 遮蔽。此时输入容器子视图可能尚未就位，延迟几拍再补，确保透明套上。
+    [self dyyy_applyCommentPanelBlur];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self dyyy_applyCommentPanelBlur];
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self dyyy_applyCommentPanelBlur];
+    });
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -12573,7 +12593,15 @@ static BOOL DYYYCommentPauseOwnsPlayback(void) {
         return;
     }
     %orig;
+    [self dyyy_applyCommentPanelBlur];
+}
 
+// 评论区毛玻璃逻辑，独立成方法：从 viewDidLayoutSubviews 与 viewWillAppear 都调用。
+// 原因：第三方 tweak（AWECommentAudioTweak）会在评论容器派生类上用 class_addMethod
+// 覆盖 viewDidLayoutSubviews，使本方法被遮蔽而不执行，导致透明静默失效；
+// viewWillAppear 是它不触碰的触发点，这里补一份。
+%new
+- (void)dyyy_applyCommentPanelBlur {
     if (!DYYYGetBool(@"DYYYEnableCommentBlur"))
         return;
 
