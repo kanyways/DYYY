@@ -100,6 +100,9 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)containsSubviewOfClass:(Class)targetClass inContainer:(id)container;
 
 + (void)applyBlurEffectToView:(UIView *)view transparency:(float)userTransparency blurViewTag:(NSInteger)tag;
++ (Class)resolveClassByExactNames:(NSArray<NSString *> *)exactNames
+                 containingMarker:(NSString *)marker
+                        underRoot:(NSString *)rootClassName;
 + (void)clearBackgroundRecursivelyInView:(UIView *)view;
 
 /**

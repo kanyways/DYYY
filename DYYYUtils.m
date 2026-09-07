@@ -1204,6 +1204,57 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     }
 }
 
+/*
+ * @brief 耐热更新的运行时类解析。
+ * @discussion 抖音热更新/升级会改动 Swift 内部类名。这些类名是逆向得到的硬编码字符串，
+ *   一旦 App 内部改名，NSClassFromString 就解析不到，功能（如评论区毛玻璃）会"静默消失"。
+ *   这里先按精确名尝试；全部失败则在运行时扫描已注册类：名字含 marker（且可选继承自
+ *   root 类）的类里选名字最短者（更可能是具体业务类）。命中后缓存，避免每次布局回调重复扫描。
+ * @param exactNames 优先尝试的精确类名数组（逆向结果）。
+ * @param marker     兜底扫描的名字子串（取类名中的稳定 token，如 CommentContainerInner）。
+ * @param rootClassName 可选，限定为某基类的子类；传 nil 表示不限。
+ * @return 解析到的类，找不到返回 nil。
+ */
++ (Class)resolveClassByExactNames:(NSArray<NSString *> *)exactNames
+                 containingMarker:(NSString *)marker
+                        underRoot:(NSString *)rootClassName {
+    for (NSString *name in exactNames) {
+        if (name.length == 0) continue;
+        Class c = NSClassFromString(name);
+        if (c) return c;
+    }
+    if (marker.length == 0) return nil;
+
+    static NSMutableDictionary<NSString *, id> *s_resolveCache = nil;
+    static dispatch_once_t s_resolveOnce;
+    dispatch_once(&s_resolveOnce, ^{
+        s_resolveCache = [NSMutableDictionary dictionary];
+    });
+
+    id cached = s_resolveCache[marker];
+    if (cached) return (cached == (id)[NSNull null]) ? nil : (Class)cached;
+
+    Class rootClass = (rootClassName.length ? NSClassFromString(rootClassName) : nil);
+    Class best = nil;
+    unsigned int count = 0;
+    Class *classes = objc_copyClassList(&count);
+    if (classes) {
+        for (unsigned int i = 0; i < count; i++) {
+            Class cls = classes[i];
+            NSString *name = NSStringFromClass(cls);
+            if (!name || [name rangeOfString:marker].location == NSNotFound) continue;
+            if (rootClass && ![cls isSubclassOfClass:rootClass]) continue;
+            if (!best || name.length < NSStringFromClass(best).length) best = cls;
+        }
+        free(classes);
+    }
+    if (best) {
+        NSLog(@"[DYYY] 类名容错解析(marker=%@): %@", marker, NSStringFromClass(best));
+        s_resolveCache[marker] = best;
+    }
+    return best;
+}
+
 + (void)clearBackgroundRecursivelyInView:(UIView *)view {
     if (!view)
         return;

@@ -3609,7 +3609,9 @@ static char kDYYYCommentLabelLastTextKey;
     if (!DYYYGetBool(@"DYYYEnableCommentBlur"))
         return;
 
-    Class commentContainerClass = NSClassFromString(@"AWECommentPanelContainerSwiftImpl.CommentContainerInnerViewController");
+    Class commentContainerClass = [DYYYUtils resolveClassByExactNames:@[ @"AWECommentPanelContainerSwiftImpl.CommentContainerInnerViewController", @"AWECommentContainerViewController" ]
+                                                  containingMarker:@"CommentContainerInner"
+                                                          underRoot:@"AWEBaseListViewController"];
     // 类名失效兜底：抖音改版重命名 Swift 类后 NSClassFromString 返回 nil，
     // isKindOfClass 恒为 NO，毛玻璃会"静默消失"且没有任何日志。
     // 这里只在首次检测到失效时打一条日志，方便排查升级后毛玻璃突然没了的问题。
@@ -12575,7 +12577,9 @@ static BOOL DYYYCommentPauseOwnsPlayback(void) {
     if (!DYYYGetBool(@"DYYYEnableCommentBlur"))
         return;
 
-    Class containerViewClass = NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputContainerView");
+    Class containerViewClass = [DYYYUtils resolveClassByExactNames:@[ @"AWECommentInputViewSwiftImpl.CommentInputContainerView", @"CommentInputContainerView" ]
+                                                containingMarker:@"CommentInputContainer"
+                                                        underRoot:@"UIView"];
     NSArray<UIView *> *containerViews = [DYYYUtils findAllSubviewsOfClass:containerViewClass inContainer:self.view];
     for (UIView *containerView in containerViews) {
         for (UIView *subview in containerView.subviews) {
@@ -12589,7 +12593,9 @@ static BOOL DYYYCommentPauseOwnsPlayback(void) {
         }
     }
 
-    Class middleContainerClass = NSClassFromString(@"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer");
+    Class middleContainerClass = [DYYYUtils resolveClassByExactNames:@[ @"AWECommentInputViewSwiftImpl.CommentInputViewMiddleContainer", @"CommentInputViewMiddleContainer" ]
+                                                  containingMarker:@"CommentInputViewMiddleContainer"
+                                                          underRoot:@"UIView"];
     NSArray<UIView *> *middleContainers = [DYYYUtils findAllSubviewsOfClass:middleContainerClass inContainer:self.view];
     for (UIView *middleContainer in middleContainers) {
         BOOL containsDanmu = NO;
