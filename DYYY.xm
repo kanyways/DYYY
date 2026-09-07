@@ -2836,13 +2836,8 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
         return;
     }
 
-    // 评论区不显示"回复"文字：回复标签定位与加宽后的时间/属地/去发布作品易冲突，
-    // 按用户要求恢复置空（原始精确时间行为）。
-    if ([text isEqualToString:@"回复"]) {
-        %orig(@"");
-        return;
-    }
-
+    // 恢复"回复"文字显示：此前因时间加宽后与回复标签/属地/去发布作品易冲突而被置空；
+    // 现在时间加宽已改为按右侧最近同级标签实测边界（DYYYCommentRightBoundaryMinX），不再冲突。
     NSError *error = nil;
     NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"^(\\d{10,13})([\\s\\S]*)" options:0 error:&error];
     
@@ -4835,6 +4830,23 @@ static void DYYYApplyPlayInteractionElementLayoutFromElement(id element, NSStrin
     DYYYApplyPlayInteractionElementLayout(elementView, fallbackClassName);
 }
 
+// 视频页底部时间：宿主原生是 "yyyy-M-d H:mm"（如 2026-9-7 21:55，无补零），
+// 统一重排成 "yyyy-MM-dd HH:mm"（如 2026-09-07 21:55）。非日期文本原样返回。
+static NSString *DYYYReformatDateTextToFull(NSString *text) {
+    if (text.length == 0) return text;
+    NSDateFormatter *in = [[NSDateFormatter alloc] init];
+    in.dateFormat = @"yyyy-M-d H:mm";
+    NSDate *d = [in dateFromString:text];
+    if (!d) {
+        in.dateFormat = @"yyyy-M-d HH:mm";
+        d = [in dateFromString:text];
+    }
+    if (!d) return text;
+    NSDateFormatter *out = [[NSDateFormatter alloc] init];
+    out.dateFormat = @"yyyy-MM-dd HH:mm";
+    return [out stringFromDate:d];
+}
+
 
 %hook AWEPlayInteractionTimestampElement
 
@@ -4888,6 +4900,11 @@ static void DYYYApplyPlayInteractionElementLayoutFromElement(id element, NSStrin
 
         NSString *currentText = lbl.text ?: @"";
         if ([currentText containsString:starLocation]) return;
+
+        // 视频页底部时间若还是 "yyyy-M-d H:mm" 原生格式，先重排成 yyyy-MM-dd HH:mm
+        if (![currentText containsString:@"IP属地："]) {
+            currentText = DYYYReformatDateTextToFull(currentText);
+        }
 
         if ([currentText containsString:@"IP属地："]) {
             NSRange range = [currentText rangeOfString:@"IP属地："];
