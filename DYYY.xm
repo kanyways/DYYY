@@ -2870,6 +2870,11 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
         NSString *newText = [NSString stringWithFormat:@"%@%@", formattedDate, suffix];
         %orig(newText);
     } else {
+        // 【临时诊断】确认相对时间文本("刚刚"/"N小时前")是否流经本 hook、以及 label 类名；
+        // 拿到流经证据后，再决策如何精确转换（AWECommentModel.createTime 是 ObjC 属性可用 KVC）。验证完删除
+        if ([text containsString:@"分钟前"] || [text containsString:@"小时前"] || [text hasPrefix:@"刚刚"]) {
+            NSLog(@"DYYY_RELTIME text=%@ class=%@ frame=%@", text, NSStringFromClass([(id)self class]), NSStringFromCGRect([(UILabel *)self frame]));
+        }
         %orig(text);
     }
 }
@@ -2919,6 +2924,22 @@ static CGFloat DYYYCommentRightBoundaryMinX(UILabel *label) {
     }
     return nearestMinX;
 }
+
+// 【临时诊断】打印"时间行"（时间/回复/去发布作品等）同排所有 UI 元素 class+frame，
+// 用于决定"回复"与"去发布作品"间距的移动量与移动对象。验证完删除。
+static void DYYYCommentLogRowElements(UIView *node, CGFloat centerY) {
+    for (UIView *sib in node.subviews) {
+        if (sib.hidden) continue;
+        if ([sib isKindOfClass:[UILabel class]] || [sib isKindOfClass:[UIButton class]] ||
+            [sib isKindOfClass:[UIImageView class]]) {
+            CGRect r = sib.frame;
+            if (r.size.width > 0.01 && fabs(CGRectGetMidY(r) - centerY) < 24.0) {
+                NSLog(@"DYYY_META   row class=%@ frame=%@", NSStringFromClass([sib class]), NSStringFromCGRect(r));
+            }
+        }
+        DYYYCommentLogRowElements(sib, centerY);
+    }
+}
 %group DYYYCommentExactTimeGroup
 // setText 记录最近一次文本；setFrame 时 Swift label 的 text 属性可能为 nil，
 // 用这个关联对象 key 兜底取回（见 setFrame）。
@@ -2936,6 +2957,21 @@ static char kDYYYCommentLabelLastTextKey;
 
     UILabel *label = (UILabel *)self;
     if (!text || text.length == 0) return;
+
+    // 【临时诊断】"回复"/"去发布作品" 标签的 frame 与父链结构——用于调整两者间距；验证完删除
+    if ([text containsString:@"回复"] || [text containsString:@"发布作品"]) {
+        NSLog(@"DYYY_META text=%@ class=%@ frame=%@", text, NSStringFromClass([(id)self class]), NSStringFromCGRect(label.frame));
+        int depth = 0;
+        for (UIView *v = label.superview; v && depth < 5; v = v.superview, depth++) {
+            NSLog(@"DYYY_META   up%d %@ frame=%@", depth, NSStringFromClass([v class]), NSStringFromCGRect(v.frame));
+        }
+    }
+    // 【临时诊断】时间行："2小时前·广东" / "2026-08-31 21:43·广东" 等文本到达时，
+    // 打印整行所有元素 class+frame（含"回复"/"去发布作品"/图标），供间距定标。验证完删除
+    if ([text containsString:@"前"] || [text containsString:@"·"] || [text containsString:@":"]) {
+        NSLog(@"DYYY_META timeRow text=%@ class=%@ frame=%@", text, NSStringFromClass([(id)self class]), NSStringFromCGRect(label.frame));
+        DYYYCommentLogRowElements(label.superview, CGRectGetMidY(label.frame));
+    }
 
     // 记录最近一次文本：Swift label 的 text 属性在 setFrame 时可能返回 nil（见下方 setFrame 的
     // 三级兜底），所以每次 setText 拿到可靠参数时顺手存一份。
