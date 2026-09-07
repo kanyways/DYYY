@@ -478,6 +478,7 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 
 @interface AWECommentContainerViewController : UIViewController
 - (_TtC33AWECommentPanelContainerSwiftImpl31CommentViewControllerStateModel *)state;
+- (void)dyyy_applyCommentPanelBlur; // DYYY %new：评论区毛玻璃逻辑（见 DYYY.xm）
 @end
 
 @interface _TtC33AWECommentPanelContainerSwiftImpl30CommentContainerInnerViewModel : NSObject
