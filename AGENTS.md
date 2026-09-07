@@ -66,8 +66,9 @@
 
 ### 3. Hook 实现
 1. 使用 Logos 语法 `%hook/%orig/%new`。对敏感类（如 `AWESettingBaseViewController`）需要在 `dealloc` 中清理 KVO/通知（示例：`DYYYRemoveRemoteConfigObserver`）。
-2. Hook 中新增的手势、子视图必须通过 `objc_setAssociatedObject` 或弱引用管理生命周期（天气控件入口即参考）。
-3. 所有 UI 写操作必须在主线程 `dispatch_async(dispatch_get_main_queue(), ^{ ... })`，避免阻塞抖音线程。
+2. **`%new` 方法必须在 `AwemeHeaders.h` 手动声明**：Logos 的 `%new` 只提供运行时实现，**不会**生成编译器可见的 `@interface` 声明。凡是在 `%hook` 内 `[self xxx]` 调用该 `%new` 方法，都会报 `no visible @interface for '<Class>' declares the selector 'xxx'` 编译错误。所以每个 `%new` 方法都要在 `AwemeHeaders.h` 对应类的 `@interface @...@end` 里补一行方法声明（参考 `applyBlurEffectIfNeeded` @AwemeHeaders.h:529、`dyyy_applyCommentPanelBlur`）。凡新增 `%new`，先声明到 AwemeHeaders.h，再写调用。
+3. Hook 中新增的手势、子视图必须通过 `objc_setAssociatedObject` 或弱引用管理生命周期（天气控件入口即参考）。
+4. 所有 UI 写操作必须在主线程 `dispatch_async(dispatch_get_main_queue(), ^{ ... })`，避免阻塞抖音线程。
 
 ### 4. 设置/远程配置
 1. 开关值均来自 `NSUserDefaults`，统一使用 `DYYYGetBool/DYYYGetString` 等宏或 `DYYYSettingsHelper` 提供的方法。
@@ -101,6 +102,7 @@
 - 新增 Hook 是否受开关保护并能恢复默认行为。
 - 是否确保弱引用/通知/定时器释放（`AWMSafeDispatchTimer` 用于延时场景）。
 - 所有新增抖音类声明已写入 `AwemeHeaders.h`。
+- **每个 `%new` 方法都已在 `AwemeHeaders.h` 对应类里声明**（否则 `%hook` 内调用会编译失败）。
 - 是否在对应类/文件中添加函数，并补充必要头文件 import。
 
 ## 常见工作流示例
