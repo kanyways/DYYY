@@ -753,16 +753,18 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
     }
 
     NSString *currentLabelText = label.text ?: @"";
+    // 属地按"省·市"分隔展示；这里保留 "IP属地：" 前缀（用户要求）。
+    NSString *starLocation = [[resolvedLocation componentsSeparatedByString:@" "] componentsJoinedByString:@"·"];
     NSString *newText = nil;
     NSRange ipRange = [currentLabelText rangeOfString:@"IP属地："];
     if (ipRange.location != NSNotFound) {
         NSString *baseText = [currentLabelText substringToIndex:ipRange.location];
-        newText = [NSString stringWithFormat:@"%@IP属地：%@", baseText, resolvedLocation];
+        newText = [NSString stringWithFormat:@"%@IP属地：%@", baseText, starLocation];
     } else {
         if (currentLabelText.length > 0) {
-            newText = [NSString stringWithFormat:@"%@  IP属地：%@", currentLabelText, resolvedLocation];
+            newText = [NSString stringWithFormat:@"%@  IP属地：%@", currentLabelText, starLocation];
         } else {
-            newText = [NSString stringWithFormat:@"IP属地：%@", resolvedLocation];
+            newText = [NSString stringWithFormat:@"IP属地：%@", starLocation];
         }
     }
 
@@ -905,13 +907,13 @@ static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLoc
             if (isDirectCity) {
                 label.text = [NSString stringWithFormat:@"%@  IP属地：%@", originalText, cityName];
             } else {
-                label.text = [NSString stringWithFormat:@"%@  IP属地：%@ %@", originalText, provinceName, cityName];
+                label.text = [NSString stringWithFormat:@"%@  IP属地：%@·%@", originalText, provinceName, cityName];
             }
         } else {
             BOOL containsProvince = [originalText containsString:provinceName];
             BOOL containsCity = [originalText containsString:cityName];
             if (containsProvince && !isDirectCity && !containsCity) {
-                label.text = [NSString stringWithFormat:@"%@ %@", originalText, cityName];
+                label.text = [NSString stringWithFormat:@"%@  IP属地：%@·%@", originalText, provinceName, cityName];
             } else if (isDirectCity && !containsCity) {
                 label.text = [NSString stringWithFormat:@"%@  IP属地：%@", originalText, cityName];
             }

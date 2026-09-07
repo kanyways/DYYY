@@ -2817,7 +2817,13 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
 + (id)formattedDateForTimestamp:(double)timestamp {
     if (!DYYYGetBool(@"DYYYCommentExactTime")) return %orig(timestamp);
-    return [NSString stringWithFormat:@"%.0f ", timestamp];
+    // 直接返回 yyyy-MM-dd HH:mm：评论/视频页底部(AWEPlayInteractionTimestampElement)
+    // 的时间都统一用这个格式。之前返回原始时间戳，只有评论(label 有 setText hook)能
+    // 被二次格式化成 yyyy-MM-dd HH:mm，底部那个元素没走到格式化 hook，显示成了时间戳。
+    NSDate *date = [NSDate dateWithTimeIntervalSince1970:timestamp];
+    NSDateFormatter *f = [[NSDateFormatter alloc] init];
+    [f setDateFormat:@"yyyy-MM-dd HH:mm"];
+    return [f stringFromDate:date];
 }
 
 %end
@@ -2830,6 +2836,8 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
         return;
     }
 
+    // 评论区不显示"回复"文字：回复标签定位与加宽后的时间/属地/去发布作品易冲突，
+    // 按用户要求恢复置空（原始精确时间行为）。
     if ([text isEqualToString:@"回复"]) {
         %orig(@"");
         return;
@@ -2861,9 +2869,9 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 
         NSDate *date = [NSDate dateWithTimeIntervalSince1970:ts];
         NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-        [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+        [formatter setDateFormat:@"yyyy-MM-dd HH:mm"];
         NSString *formattedDate = [formatter stringFromDate:date];
-        
+
         NSString *newText = [NSString stringWithFormat:@"%@%@", formattedDate, suffix];
         %orig(newText);
     } else {
@@ -2877,6 +2885,45 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
 // 关键点：Swift 类的 ObjC 名称带点号（"AWECommentSwiftBizUI.Comment
 // InteractionBaseLabel"），Logos 的 %hook 不能直接用点号类名，
 // 所以在 %ctor 里用 objc_getClass 拿到类后映射成下划线别名（见 13095 行）。
+
+// 递归扫描 node 子树里的 UILabel/UIButton,取"同一行、位于时间右侧最近"者的左边缘。
+// 用纯递归 C 函数(非 block),避免 block 循环引用;target 为时间标签本身,跳过之。
+static void DYYYCommentScanRowRight(UIView *node, UIView *target,
+                                    CGFloat timeMaxX, CGFloat timeCenterY, CGFloat *nearestMinX) {
+    for (UIView *sib in node.subviews) {
+        if (sib == target || sib.hidden) continue;
+        // 目标:文本标签、按钮、图片(图标)。"去发布作品"是 ↗图标(UIImageView)+ 文字,
+        // 三者都纳入,取其中最靠左的 minX(即图标左缘)作为边界,时间才不会被图标盖住。
+        if ([sib isKindOfClass:[UILabel class]] || [sib isKindOfClass:[UIButton class]] ||
+            [sib isKindOfClass:[UIImageView class]]) {
+            CGRect r = sib.frame;
+            if (r.size.width > 0.01 && fabs(CGRectGetMidY(r) - timeCenterY) < 24.0 &&
+                CGRectGetMinX(r) >= timeMaxX - 1.0 && CGRectGetMinX(r) < *nearestMinX) {
+                *nearestMinX = CGRectGetMinX(r);
+            }
+        }
+        DYYYCommentScanRowRight(sib, target, timeMaxX, timeCenterY, nearestMinX);
+    }
+}
+
+// 治本：时间标签加宽不再靠魔数 reservedRight=120，而是实测「同一行、位于时间标签右侧、
+// 最近的一个可见文本/按钮」的左边缘，把时间宽度限制在该左边缘之前并留 gap。
+// 递归扫描覆盖嵌套容器里的"去发布作品"等(不只直接同级子视图);同中心Y过滤避免误取上方正文;
+// 逐级向上(当前层找不到就往父容器找,最多 4 层)。
+static CGFloat DYYYCommentRightBoundaryMinX(UILabel *label) {
+    CGFloat timeMaxX = CGRectGetMaxX(label.frame);
+    CGFloat timeCenterY = CGRectGetMidY(label.frame);
+    CGFloat nearestMinX = CGFLOAT_MAX;
+    int depth = 0;
+    for (UIView *container = label.superview; container && depth < 4; container = container.superview, depth++) {
+        DYYYCommentScanRowRight(container, label, timeMaxX, timeCenterY, &nearestMinX);
+        if (nearestMinX != CGFLOAT_MAX) break;
+    }
+    if (nearestMinX == CGFLOAT_MAX) {
+        return [UIScreen mainScreen].bounds.size.width;
+    }
+    return nearestMinX;
+}
 %group DYYYCommentExactTimeGroup
 // setText 记录最近一次文本；setFrame 时 Swift label 的 text 属性可能为 nil，
 // 用这个关联对象 key 兜底取回（见 setFrame）。
@@ -2927,12 +2974,13 @@ static char kDYYYCommentLabelLastTextKey;
         CGFloat expectedWidth = ceilf([text sizeWithAttributes:@{NSFontAttributeName: font}].width);
         CGRect currentFrame = label.frame;
 
-        // 【A 修复】扩充宽度时必须给行尾"归属地/分享"留位：完整日期时间会让行溢出，
-        // 后者被顶到右侧分享按钮底下遮挡。超预算时改由 adjustsFontSizeToFitWidth
-        // 让时间文本自适应缩小（内容不裁剪），而非继续向右侵占。
-        CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
-        CGFloat reservedRight = 120.0; // 行尾 IP属地 + 分享 预留
-        CGFloat budgetWidth = screenWidth - CGRectGetMinX(currentFrame) - reservedRight;
+        // 【治本】扩充宽度不再用魔数 reservedRight=120，而是实测"时间右侧最近同级标签"左缘，
+        // 得到真实可用宽度；超预算由 adjustsFontSizeToFitWidth 自适应缩小，不裁剪、不侵占。
+        CGFloat gap = 8.0;                              // 与右侧内容的视觉间距
+        CGFloat boundaryMinX = DYYYCommentRightBoundaryMinX(label);
+        CGFloat availWidth = boundaryMinX - CGRectGetMinX(currentFrame) - gap;
+        // 不小于当前宽度(宿主原有)，避免把原本不重叠的时间缩掉
+        CGFloat budgetWidth = MAX(currentFrame.size.width, availWidth);
         CGFloat targetWidth = expectedWidth;
         if (budgetWidth > 0) {
             targetWidth = MIN(expectedWidth, budgetWidth);
@@ -2997,10 +3045,11 @@ static char kDYYYCommentLabelLastTextKey;
             UIFont *font = label.font;
             if (font) {
                 CGFloat expectedWidth = ceilf([text sizeWithAttributes:@{NSFontAttributeName: font}].width);
-                // 【A 修复】同 setText：加宽不越过"归属地/分享"预留区，超出由自适应缩小兜底
-                CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
-                CGFloat reservedRight = 120.0;
-                CGFloat budgetWidth = screenWidth - frame.origin.x - reservedRight;
+                // 【治本】同 setText：改用实测"时间右侧最近同级标签"左缘限宽，替换魔数 120
+                CGFloat gap = 8.0;
+                CGFloat boundaryMinX = DYYYCommentRightBoundaryMinX(label);
+                CGFloat availWidth = boundaryMinX - frame.origin.x - gap;
+                CGFloat budgetWidth = MAX(frame.size.width, availWidth);
                 CGFloat targetWidth = expectedWidth;
                 if (budgetWidth > 0) {
                     targetWidth = MIN(expectedWidth, budgetWidth);
@@ -3057,9 +3106,9 @@ static char kDYYYCommentLabelLastTextKey;
 
         NSDate *date = [NSDate dateWithTimeIntervalSince1970:ts];
         NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-        [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+        [formatter setDateFormat:@"yyyy-MM-dd HH:mm"];
         NSString *formattedDate = [formatter stringFromDate:date];
-        
+
         NSMutableAttributedString *newAttrStr = [attributedText mutableCopy];
         [newAttrStr replaceCharactersInRange:[match rangeAtIndex:1] withString:formattedDate];
         
@@ -4834,15 +4883,18 @@ static void DYYYApplyPlayInteractionElementLayoutFromElement(id element, NSStrin
     void (^updateLabelWithLocation)(UILabel *, NSString *) = ^(UILabel *lbl, NSString *location) {
         if (location.length == 0) return;
 
+        // 属地统一用 '*' 连省/市（视频页底部保留 'IP属地：' 前缀）
+        NSString *starLocation = [[location componentsSeparatedByString:@" "] componentsJoinedByString:@"·"];
+
         NSString *currentText = lbl.text ?: @"";
-        if ([currentText containsString:location]) return;
+        if ([currentText containsString:starLocation]) return;
 
         if ([currentText containsString:@"IP属地："]) {
             NSRange range = [currentText rangeOfString:@"IP属地："];
             NSString *baseText = [currentText substringToIndex:range.location];
-            lbl.text = [NSString stringWithFormat:@"%@IP属地：%@", baseText, location];
+            lbl.text = [NSString stringWithFormat:@"%@IP属地：%@", baseText, starLocation];
         } else if (currentText.length > 0) {
-            lbl.text = [NSString stringWithFormat:@"%@  IP属地：%@", currentText, location];
+            lbl.text = [NSString stringWithFormat:@"%@  IP属地：%@", currentText, starLocation];
         }
 
         [DYYYUtils applyColorSettingsToLabel:lbl colorHexString:labelColorHex];
