@@ -4867,20 +4867,29 @@ static void DYYYApplyPlayInteractionElementLayoutFromElement(id element, NSStrin
 }
 
 // 视频页底部时间：宿主原生是 "yyyy-M-d H:mm"（如 2026-9-7 21:55，无补零），
-// 统一重排成 "yyyy-MM-dd HH:mm"（如 2026-09-07 21:55）。非日期文本原样返回。
+// 统一重排成 "yyyy-MM-dd HH:mm"（如 2026-09-07 21:55）。只认行首日期前缀，
+// 尾部（"  IP属地：…" 等）原样保留。非日期文本原样返回。
 static NSString *DYYYReformatDateTextToFull(NSString *text) {
     if (text.length == 0) return text;
+    static NSRegularExpression *regex;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        regex = [NSRegularExpression regularExpressionWithPattern:@"^\\d{4}-\\d{1,2}-\\d{1,2} \\d{1,2}:\\d{2}" options:0 error:nil];
+    });
+    NSTextCheckingResult *m = [regex firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
+    if (!m) return text;
     NSDateFormatter *in = [[NSDateFormatter alloc] init];
     in.dateFormat = @"yyyy-M-d H:mm";
-    NSDate *d = [in dateFromString:text];
+    NSDate *d = [in dateFromString:[text substringWithRange:m.range]];
     if (!d) {
         in.dateFormat = @"yyyy-M-d HH:mm";
-        d = [in dateFromString:text];
+        d = [in dateFromString:[text substringWithRange:m.range]];
     }
     if (!d) return text;
     NSDateFormatter *out = [[NSDateFormatter alloc] init];
     out.dateFormat = @"yyyy-MM-dd HH:mm";
-    return [out stringFromDate:d];
+    NSString *suffix = [text substringFromIndex:NSMaxRange(m.range)];
+    return [NSString stringWithFormat:@"%@%@", [out stringFromDate:d], suffix];
 }
 
 
@@ -4935,6 +4944,8 @@ static NSString *DYYYReformatDateTextToFull(NSString *text) {
         NSString *starLocation = [[location componentsSeparatedByString:@" "] componentsJoinedByString:@"·"];
 
         NSString *currentText = lbl.text ?: @"";
+        // 【临时诊断】属地拼接入口的原始文本；验证完删除
+        NSLog(@"[DYYY] updateLoc in=[%@]", currentText);
         if ([currentText containsString:starLocation]) return;
 
         // 视频页底部时间若还是 "yyyy-M-d H:mm" 原生格式，先重排成 yyyy-MM-dd HH:mm
@@ -5072,6 +5083,17 @@ static NSString *DYYYReformatDateTextToFull(NSString *text) {
     if (timestampLabelSelector && [self respondsToSelector:timestampLabelSelector]) {
         label = ((UILabel *(*)(id, SEL))objc_msgSend)(self, timestampLabelSelector);
     }
+    // 属地拼接之后宿主重排仍可能把时间文本重置回 "yyyy-M-d H:mm"，
+    // 这里幂等重排兜底（等值时跳过，无额外开销）。
+    if (label && label.text.length > 0) {
+        NSString *fixed = DYYYReformatDateTextToFull(label.text);
+        if (![fixed isEqualToString:label.text]) {
+            label.text = fixed;
+        }
+        // 【临时诊断】观察宿主是否在每次重排时重置时间文本；验证完删除
+        NSLog(@"[DYYY] layoutElt text=%@", fixed);
+    }
+
     if (label && label.text.length > 0 && [label.text containsString:@"IP属地："]) {
         NSString *layoutColorHex = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYLabelColor"];
         if (DYYYGetBool(@"DYYYEnableRandomGradient")) {
