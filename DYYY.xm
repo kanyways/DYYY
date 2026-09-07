@@ -26,6 +26,33 @@
 #import "DYYYFloatClearButton.h"
 #import "DYYYPrivacyRecordUploadGuard.h"
 #import "DYYYFloatSpeedButton.h"
+#import <stdarg.h>
+
+// 【临时诊断】真机未越狱，NSLog 无稳定直接查看通道：
+// 双写——NSLog（Console/爱思实时日志能刷到就刷）+ 宿主沙盒 Documents/DYYYDiagnosis.log
+// （爱思助手 → 手机应用 → 抖音 → 文件管理 → Documents 里就能翻到）。验证完删除。
+static void DYYYDiagLog(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *msg = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSLog(@"[DYYY] %@", msg);
+
+    NSString *docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    NSString *path = [docs stringByAppendingPathComponent:@"DYYYDiagnosis.log"];
+    // 限制日志体积：超 1MB 先清除（诊断文件，防止沙盒膨胀）
+    NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+    if (attrs && [attrs fileSize] > 1024 * 1024) {
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    }
+    NSData *data = [[NSString stringWithFormat:@"%@\n", msg] dataUsingEncoding:NSUTF8StringEncoding];
+    FILE *fp = fopen([path fileSystemRepresentation], "a");
+    if (fp) {
+        fwrite(data.bytes, 1, data.length, fp);
+        fclose(fp);
+    }
+}
 #import "DYYYSettingViewController.h"
 #import "DYYYToast.h"
 #import "DYYYUtils.h"
@@ -2873,7 +2900,7 @@ static void DYYYDisableAVPlayerItemHDRMetadata(AVPlayerItem *item) {
         // 【临时诊断】确认相对时间文本("刚刚"/"N小时前")是否流经本 hook、以及 label 类名；
         // 拿到流经证据后，再决策如何精确转换（AWECommentModel.createTime 是 ObjC 属性可用 KVC）。验证完删除
         if ([text containsString:@"分钟前"] || [text containsString:@"小时前"] || [text hasPrefix:@"刚刚"]) {
-            NSLog(@"DYYY_RELTIME text=%@ class=%@ frame=%@", text, NSStringFromClass([(id)self class]), NSStringFromCGRect([(UILabel *)self frame]));
+            DYYYDiagLog(@"DYYY_RELTIME text=%@ class=%@ frame=%@", text, NSStringFromClass([(id)self class]), NSStringFromCGRect([(UILabel *)self frame]));
         }
         %orig(text);
     }
@@ -2934,7 +2961,7 @@ static void DYYYCommentLogRowElements(UIView *node, CGFloat centerY) {
             [sib isKindOfClass:[UIImageView class]]) {
             CGRect r = sib.frame;
             if (r.size.width > 0.01 && fabs(CGRectGetMidY(r) - centerY) < 24.0) {
-                NSLog(@"DYYY_META   row class=%@ frame=%@", NSStringFromClass([sib class]), NSStringFromCGRect(r));
+                DYYYDiagLog(@"DYYY_META   row class=%@ frame=%@", NSStringFromClass([sib class]), NSStringFromCGRect(r));
             }
         }
         DYYYCommentLogRowElements(sib, centerY);
@@ -2960,16 +2987,16 @@ static char kDYYYCommentLabelLastTextKey;
 
     // 【临时诊断】"回复"/"去发布作品" 标签的 frame 与父链结构——用于调整两者间距；验证完删除
     if ([text containsString:@"回复"] || [text containsString:@"发布作品"]) {
-        NSLog(@"DYYY_META text=%@ class=%@ frame=%@", text, NSStringFromClass([(id)self class]), NSStringFromCGRect(label.frame));
+        DYYYDiagLog(@"DYYY_META text=%@ class=%@ frame=%@", text, NSStringFromClass([(id)self class]), NSStringFromCGRect(label.frame));
         int depth = 0;
         for (UIView *v = label.superview; v && depth < 5; v = v.superview, depth++) {
-            NSLog(@"DYYY_META   up%d %@ frame=%@", depth, NSStringFromClass([v class]), NSStringFromCGRect(v.frame));
+            DYYYDiagLog(@"DYYY_META   up%d %@ frame=%@", depth, NSStringFromClass([v class]), NSStringFromCGRect(v.frame));
         }
     }
     // 【临时诊断】时间行："2小时前·广东" / "2026-08-31 21:43·广东" 等文本到达时，
     // 打印整行所有元素 class+frame（含"回复"/"去发布作品"/图标），供间距定标。验证完删除
     if ([text containsString:@"前"] || [text containsString:@"·"] || [text containsString:@":"]) {
-        NSLog(@"DYYY_META timeRow text=%@ class=%@ frame=%@", text, NSStringFromClass([(id)self class]), NSStringFromCGRect(label.frame));
+        DYYYDiagLog(@"DYYY_META timeRow text=%@ class=%@ frame=%@", text, NSStringFromClass([(id)self class]), NSStringFromCGRect(label.frame));
         DYYYCommentLogRowElements(label.superview, CGRectGetMidY(label.frame));
     }
 
@@ -4945,7 +4972,7 @@ static NSString *DYYYReformatDateTextToFull(NSString *text) {
 
         NSString *currentText = lbl.text ?: @"";
         // 【临时诊断】属地拼接入口的原始文本；验证完删除
-        NSLog(@"[DYYY] updateLoc in=[%@]", currentText);
+        DYYYDiagLog(@"[DYYY] updateLoc in=[%@]", currentText);
         if ([currentText containsString:starLocation]) return;
 
         // 视频页底部时间若还是 "yyyy-M-d H:mm" 原生格式，先重排成 yyyy-MM-dd HH:mm
@@ -5090,8 +5117,13 @@ static NSString *DYYYReformatDateTextToFull(NSString *text) {
         if (![fixed isEqualToString:label.text]) {
             label.text = fixed;
         }
-        // 【临时诊断】观察宿主是否在每次重排时重置时间文本；验证完删除
-        NSLog(@"[DYYY] layoutElt text=%@", fixed);
+        // 【临时诊断】观察宿主是否在每次重排时重置时间文本；仅文本变化时记录（重排高频）；
+        // 验证完删除
+        static NSString *lastLayoutEltText = nil;
+        if (![fixed isEqualToString:lastLayoutEltText]) {
+            lastLayoutEltText = fixed;
+            DYYYDiagLog(@"[DYYY] layoutElt text=%@", fixed);
+        }
     }
 
     if (label && label.text.length > 0 && [label.text containsString:@"IP属地："]) {
