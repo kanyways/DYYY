@@ -115,13 +115,12 @@
     return config;
 }
 
-static NSDictionary<NSString *, NSArray<NSString *> *> *DYYYDependencyTargetSourcesLookup(void) {
-    static NSDictionary<NSString *, NSArray<NSString *> *> *lookup = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-      NSDictionary *dependencies = [DYYYSettingsHelper settingsDependencyConfig][@"dependencies"];
-      NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *reverseMap = [NSMutableDictionary dictionary];
-      [dependencies enumerateKeysAndObjectsUsingBlock:^(NSString *sourceKey, NSArray *dependentItems, BOOL *stop) {
+// 将配置中"源 -> 目标列表"映射反转为"目标 -> 源列表"：
+// dependencies 与 mutualExclusions 两种配置同构，共用此函数（行为与原来一致）。
+static NSDictionary<NSString *, NSArray<NSString *> *> *DYYYReverseMapForConfigKey(NSString *configKey) {
+    NSDictionary *mapping = [DYYYSettingsHelper settingsDependencyConfig][configKey];
+    NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *reverseMap = [NSMutableDictionary dictionary];
+    [mapping enumerateKeysAndObjectsUsingBlock:^(NSString *sourceKey, NSArray *dependentItems, BOOL *stop) {
         if (![dependentItems isKindOfClass:[NSArray class]]) {
             return;
         }
@@ -136,8 +135,15 @@ static NSDictionary<NSString *, NSArray<NSString *> *> *DYYYDependencyTargetSour
             }
             [sources addObject:sourceKey];
         }
-      }];
-      lookup = [reverseMap copy];
+    }];
+    return [reverseMap copy];
+}
+
+static NSDictionary<NSString *, NSArray<NSString *> *> *DYYYDependencyTargetSourcesLookup(void) {
+    static NSDictionary<NSString *, NSArray<NSString *> *> *lookup = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        lookup = DYYYReverseMapForConfigKey(@"dependencies");
     });
     return lookup;
 }
@@ -146,25 +152,7 @@ static NSDictionary<NSString *, NSArray<NSString *> *> *DYYYMutualExclusionTarge
     static NSDictionary<NSString *, NSArray<NSString *> *> *lookup = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-      NSDictionary *mutualExclusions = [DYYYSettingsHelper settingsDependencyConfig][@"mutualExclusions"];
-      NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *reverseMap = [NSMutableDictionary dictionary];
-      [mutualExclusions enumerateKeysAndObjectsUsingBlock:^(NSString *sourceKey, NSArray *targetIdentifiers, BOOL *stop) {
-        if (![targetIdentifiers isKindOfClass:[NSArray class]]) {
-            return;
-        }
-        for (NSString *identifier in targetIdentifiers) {
-            if (identifier.length == 0) {
-                continue;
-            }
-            NSMutableArray<NSString *> *sources = reverseMap[identifier];
-            if (!sources) {
-                sources = [NSMutableArray array];
-                reverseMap[identifier] = sources;
-            }
-            [sources addObject:sourceKey];
-        }
-      }];
-      lookup = [reverseMap copy];
+        lookup = DYYYReverseMapForConfigKey(@"mutualExclusions");
     });
     return lookup;
 }
