@@ -21,9 +21,8 @@
 //  7. 版本比较（Version Utilities）、调试工具（Debug Utilities）。
 //  8. 外部 C 函数（External C Functions）：供 Logos 钩子等 C 风格代码直接调用。
 //
-//  阅读建议：新人先看"IP 属地"方法（processAndApplyIPLocationToLabel:）和
-//  颜色方案入口（colorFromSchemeHexString:），这两个方法浓缩了本文件大多数模式：
-//  运行时探测、两级缓存、回调回主队列、锁与原子操作。
+//  阅读建议：新人先看颜色方案入口（colorFromSchemeHexString:），
+//  这个方法浓缩了本文件大多数模式：运行时探测、两级缓存、回调回主队列、锁与原子操作。
 //
 #import "DYYYUtils.h"
 #import <AVFoundation/AVFoundation.h>
@@ -83,31 +82,6 @@ static BOOL s_settingsObserverScheduled = NO;
 //    多个线程同时第一次调用也不会重复执行，适合惰性创建单例/队列。
 // 2. 串行队列 + dispatch_async：写文件是磁盘 IO，不该阻塞调用线程（可能正跑在
 //    主线程上）；所有日志丢进同一个串行队列，写入互不交错、顺序不乱。
-// GeoNames 磁盘缓存上限清理：缓存按城市码一城一个 plist 且只增不删，
-// 长期使用会积累无界文件。在写入后顺带调用：超过上限时按修改时间
-// 删除最旧的，直到回到上限内。可在任意线程执行（纯文件操作）。
-static const NSInteger kDYYYGeoNamesDiskCacheLimit = 200;
-static void DYYYTrimGeoNamesDiskCache(void) {
-    NSString *cachesDir = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject];
-    NSString *geoNamesCacheDir = [cachesDir stringByAppendingPathComponent:@"DYYYGeoNamesCache"];
-    NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:geoNamesCacheDir error:nil];
-    if (files.count <= kDYYYGeoNamesDiskCacheLimit) {
-        return;
-    }
-    NSMutableArray *entries = [NSMutableArray array];
-    for (NSString *name in files) {
-        NSString *path = [geoNamesCacheDir stringByAppendingPathComponent:name];
-        NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
-        [entries addObject:@{@"path" : path, @"date" : attrs[NSFileModificationDate] ?: [NSDate distantPast]}];
-    }
-    // 新的在前，只保留最新的 200 个
-    [entries sortUsingComparator:^NSComparisonResult(id a, id b) {
-      return [b[@"date"] compare:a[@"date"]];
-    }];
-    for (NSInteger i = kDYYYGeoNamesDiskCacheLimit; i < (NSInteger)entries.count; i++) {
-        [[NSFileManager defaultManager] removeItemAtPath:entries[i][@"path"] error:nil];
-    }
-}
 
 static NSString *DYYYRuntimeLogFilePath(void) {
     static NSString *logPath = nil;
@@ -473,15 +447,12 @@ static BOOL DYYYUtilsWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
 }
 
 @interface DYYYUtils ()
-+ (NSString *)fallbackLocationFromIPAttribution:(AWEAwemeModel *)model;
-+ (NSString *)displayLocationForGeoNamesError:(NSError *)error model:(AWEAwemeModel *)model;
 + (id)dyyy_safeValueForKey:(NSString *)key fromObject:(id)object;
 + (BOOL)dyyy_objectContainsMeaningfulAdPayload:(id)object;
 @end
 
 @implementation DYYYUtils
 
-static const void *kCurrentIPRequestCityCodeKey = &kCurrentIPRequestCityCodeKey;
 
 #pragma mark - 设置读取缓存（热路径性能）
 
@@ -696,288 +667,10 @@ static NSString *DYYYJSONStringFromObject(id object) {
     return [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
 }
 
-static NSString *DYYYDisplayLocationFromGeoNamesInfo(NSDictionary *locationInfo) {
-    if (![locationInfo isKindOfClass:[NSDictionary class]]) {
-        return nil;
-    }
 
-    NSString *countryName = locationInfo[@"countryName"];
-    NSString *adminName1 = locationInfo[@"adminName1"];
-    NSString *localName = locationInfo[@"name"];
 
-    if (![countryName isKindOfClass:[NSString class]]) {
-        countryName = nil;
-    }
-    if (![adminName1 isKindOfClass:[NSString class]]) {
-        adminName1 = nil;
-    }
-    if (![localName isKindOfClass:[NSString class]]) {
-        localName = nil;
-    }
 
-    if (countryName.length > 0) {
-        if (adminName1.length > 0 && localName.length > 0 && ![countryName isEqualToString:localName]) {
-            if ([adminName1 isEqualToString:localName]) {
-                return [NSString stringWithFormat:@"%@ %@", countryName, localName];
-            }
-            return [NSString stringWithFormat:@"%@ %@ %@", countryName, adminName1, localName];
-        }
-        if (localName.length > 0 && ![countryName isEqualToString:localName]) {
-            return [NSString stringWithFormat:@"%@ %@", countryName, localName];
-        }
-        if (adminName1.length > 0 && ![countryName isEqualToString:adminName1]) {
-            return [NSString stringWithFormat:@"%@ %@", countryName, adminName1];
-        }
-        return countryName;
-    }
 
-    if (localName.length > 0) {
-        return localName;
-    }
-    if (adminName1.length > 0) {
-        return adminName1;
-    }
-
-    return nil;
-}
-
-static void DYYYApplyDisplayLocationToLabel(UILabel *label, NSString *displayLocation, NSString *colorHexString) {
-    if (!label) {
-        return;
-    }
-
-    NSString *resolvedLocation = displayLocation ?: @"";
-    resolvedLocation = [resolvedLocation stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (resolvedLocation.length == 0) {
-        resolvedLocation = @"未知";
-    }
-
-    NSString *currentLabelText = label.text ?: @"";
-    // 属地按"省·市"分隔展示；这里保留 "IP属地：" 前缀（用户要求）。
-    NSString *starLocation = [[resolvedLocation componentsSeparatedByString:@" "] componentsJoinedByString:@"·"];
-    NSString *newText = nil;
-    NSRange ipRange = [currentLabelText rangeOfString:@"IP属地："];
-    if (ipRange.location != NSNotFound) {
-        NSString *baseText = [currentLabelText substringToIndex:ipRange.location];
-        newText = [NSString stringWithFormat:@"%@IP属地：%@", baseText, starLocation];
-    } else {
-        if (currentLabelText.length > 0) {
-            newText = [NSString stringWithFormat:@"%@  IP属地：%@", currentLabelText, starLocation];
-        } else {
-            newText = [NSString stringWithFormat:@"IP属地：%@", starLocation];
-        }
-    }
-
-    if (newText.length > 0 && ![label.text isEqualToString:newText]) {
-        label.text = newText;
-    } else if (label.text.length == 0) {
-        label.text = newText;
-    }
-
-    [DYYYUtils applyColorSettingsToLabel:label colorHexString:colorHexString];
-}
-
-// ==== 关键方法：给作品标签打上"IP 属地" ====
-// 这是"内存缓存 -> 磁盘缓存 -> 网络请求 -> 回主线程刷新 UI"的完整示例，值得逐行读：
-// 1. objc_setAssociatedObject 把本次请求的城市码挂到 label 上；网络回调回来时用
-//    objc_getAssociatedObject 对比：如果用户已滚动到别的作品（城市码变了），就
-//    丢弃这次结果，避免旧数据覆盖新标签。这是无锁的"防竞态"写法。
-// 2. 缓存分两级：NSCache（进程内内存缓存，App 被杀即失）+ 沙盒 Caches 目录下的
-//    plist 文件（磁盘缓存，下次启动还在），命中就直接用，不发网络请求。
-// 3. 所有 UI 更新（改 label.text）都 dispatch_async 回主线程——UIKit 不是线程
-//    安全的，网络回调运行在后台线程，直接改 UI 会崩溃或闪烁。
-+ (void)processAndApplyIPLocationToLabel:(UILabel *)label forModel:(AWEAwemeModel *)model withLabelColor:(NSString *)colorHexString {
-    NSString *originalText = label.text ?: @"";
-    NSString *cityCode = model.cityCode;
-
-    if (cityCode.length == 0) {
-        return;
-    }
-
-    objc_setAssociatedObject(label, kCurrentIPRequestCityCodeKey, cityCode, OBJC_ASSOCIATION_COPY_NONATOMIC);
-
-    NSString *cityName = [CityManager.sharedInstance getCityNameWithCode:cityCode];
-    NSString *provinceName = [CityManager.sharedInstance getProvinceNameWithCode:cityCode];
-
-    if (!cityName || cityName.length == 0) {
-        NSString *cacheKey = cityCode;
-        static NSCache *geoNamesCache = nil;
-        static dispatch_once_t onceToken;
-        dispatch_once(&onceToken, ^{
-          geoNamesCache = [[NSCache alloc] init];
-          geoNamesCache.name = @"com.dyyy.geonames.cache";
-          geoNamesCache.countLimit = 1000;
-        });
-
-        // 1 & 2. 查内存和磁盘缓存
-        NSDictionary *cachedData = [geoNamesCache objectForKey:cacheKey];
-        if (!cachedData) {
-            NSString *cachesDir = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject];
-            NSString *geoNamesCacheDir = [cachesDir stringByAppendingPathComponent:@"DYYYGeoNamesCache"];
-            NSFileManager *fileManager = [NSFileManager defaultManager];
-            if (![fileManager fileExistsAtPath:geoNamesCacheDir]) {
-                [fileManager createDirectoryAtPath:geoNamesCacheDir withIntermediateDirectories:YES attributes:nil error:nil];
-            }
-            NSString *cacheFilePath = [geoNamesCacheDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.plist", cacheKey]];
-            if ([fileManager fileExistsAtPath:cacheFilePath]) {
-                cachedData = [NSDictionary dictionaryWithContentsOfFile:cacheFilePath];
-                if (cachedData) {
-                    [geoNamesCache setObject:cachedData forKey:cacheKey];
-                }
-            }
-        }
-
-        // 3. 处理缓存数据或发起网络请求
-        if (cachedData) {
-            NSString *displayLocation = DYYYDisplayLocationFromGeoNamesInfo(cachedData) ?: @"未知";
-
-            if (displayLocation.length == 0 || [displayLocation isEqualToString:@"未知"]) {
-                NSString *fallbackLocation = [DYYYUtils fallbackLocationFromIPAttribution:model];
-                if (fallbackLocation.length > 0) {
-                    displayLocation = fallbackLocation;
-                }
-            }
-
-            dispatch_async(dispatch_get_main_queue(), ^{
-              NSString *currentRequestCode = objc_getAssociatedObject(label, kCurrentIPRequestCityCodeKey);
-              if (![currentRequestCode isEqualToString:cityCode]) {
-                  return;
-              }
-
-              DYYYApplyDisplayLocationToLabel(label, displayLocation, colorHexString);
-            });
-        } else {
-            [CityManager fetchLocationWithGeonameId:cityCode
-                                  completionHandler:^(NSDictionary *locationInfo, NSError *error) {
-                                    __block NSString *displayLocation = @"未知";
-
-                                    if (error) {
-                                        if ([error.domain isEqualToString:DYYYGeonamesErrorDomain]) {
-                                            displayLocation = [DYYYUtils displayLocationForGeoNamesError:error model:model];
-                                        } else {
-                                            NSLog(@"[DYYY] GeoNames fetch failed: %@", error.localizedDescription);
-                                            NSString *fallbackLocation = [DYYYUtils fallbackLocationFromIPAttribution:model];
-                                            if (fallbackLocation.length > 0) {
-                                                displayLocation = fallbackLocation;
-                                            }
-                                        }
-                                    } else if (locationInfo) {
-                                        BOOL shouldCacheLocation = NO;
-
-                                        NSString *resolvedLocation = DYYYDisplayLocationFromGeoNamesInfo(locationInfo);
-                                        if (resolvedLocation.length > 0) {
-                                            displayLocation = resolvedLocation;
-                                            shouldCacheLocation = YES;
-                                        }
-
-                                        if (displayLocation.length == 0 || [displayLocation isEqualToString:@"未知"]) {
-                                            NSString *fallbackLocation = [DYYYUtils fallbackLocationFromIPAttribution:model];
-                                            if (fallbackLocation.length > 0) {
-                                                displayLocation = fallbackLocation;
-                                            }
-                                            shouldCacheLocation = NO;
-                                        }
-
-                                        if (shouldCacheLocation && ![displayLocation isEqualToString:@"未知"]) {
-                                            [geoNamesCache setObject:locationInfo forKey:cacheKey];
-                                            NSString *cachesDir = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject];
-                                            NSString *geoNamesCacheDir = [cachesDir stringByAppendingPathComponent:@"DYYYGeoNamesCache"];
-                                            NSString *cacheFilePath = [geoNamesCacheDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.plist", cacheKey]];
-                                            [locationInfo writeToFile:cacheFilePath atomically:YES];
-                                            // 磁盘缓存只增不删，写入后顺带做上限清理
-                                            DYYYTrimGeoNamesDiskCache();
-                                        }
-                                    }
-
-                                    dispatch_async(dispatch_get_main_queue(), ^{
-                                      NSString *currentRequestCode = objc_getAssociatedObject(label, kCurrentIPRequestCityCodeKey);
-                                      if (![currentRequestCode isEqualToString:cityCode]) {
-                                          return;
-                                      }
-
-                                      DYYYApplyDisplayLocationToLabel(label, displayLocation, colorHexString);
-                                    });
-                                  }];
-        }
-    }
-
-    else if (![originalText containsString:cityName]) {
-        BOOL isDirectCity = [provinceName isEqualToString:cityName] || ([cityCode hasPrefix:@"11"] || [cityCode hasPrefix:@"12"] || [cityCode hasPrefix:@"31"] || [cityCode hasPrefix:@"50"]);
-        if (!model.ipAttribution) {
-            if (isDirectCity) {
-                label.text = [NSString stringWithFormat:@"%@  IP属地：%@", originalText, cityName];
-            } else {
-                label.text = [NSString stringWithFormat:@"%@  IP属地：%@·%@", originalText, provinceName, cityName];
-            }
-        } else {
-            BOOL containsProvince = [originalText containsString:provinceName];
-            BOOL containsCity = [originalText containsString:cityName];
-            if (containsProvince && !isDirectCity && !containsCity) {
-                label.text = [NSString stringWithFormat:@"%@  IP属地：%@·%@", originalText, provinceName, cityName];
-            } else if (isDirectCity && !containsCity) {
-                label.text = [NSString stringWithFormat:@"%@  IP属地：%@", originalText, cityName];
-            }
-        }
-        [DYYYUtils applyColorSettingsToLabel:label colorHexString:colorHexString];
-    }
-}
-
-+ (NSString *)fallbackLocationFromIPAttribution:(AWEAwemeModel *)model {
-    if (!model) {
-        return nil;
-    }
-
-    NSString *rawAttribution = nil;
-    @try {
-        rawAttribution = model.ipAttribution;
-    } @catch (NSException *exception) {
-        return nil;
-    }
-
-    if (![rawAttribution isKindOfClass:[NSString class]]) {
-        return nil;
-    }
-
-    NSString *trimmedValue = [rawAttribution stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (trimmedValue.length == 0) {
-        return nil;
-    }
-
-    NSArray<NSString *> *prefixes = @[ @"IP属地：", @"IP属地:", @"IP 属地：", @"IP 属地:" ];
-    for (NSString *prefix in prefixes) {
-        if ([trimmedValue hasPrefix:prefix]) {
-            trimmedValue = [trimmedValue substringFromIndex:prefix.length];
-            break;
-        }
-    }
-
-    trimmedValue = [trimmedValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-
-    return trimmedValue.length > 0 ? trimmedValue : nil;
-}
-
-+ (NSString *)displayLocationForGeoNamesError:(NSError *)error model:(AWEAwemeModel *)model {
-    NSString *fallbackLocation = [DYYYUtils fallbackLocationFromIPAttribution:model];
-    if (fallbackLocation.length > 0) {
-        return fallbackLocation;
-    }
-
-    NSDictionary *status = error.userInfo[DYYYGeonamesStatusUserInfoKey];
-    if ([status isKindOfClass:[NSDictionary class]]) {
-        NSString *statusJSON = DYYYJSONStringFromObject(@{@"status" : status});
-        if (statusJSON.length > 0) {
-            return [NSString stringWithFormat:@"未知 %@", statusJSON];
-        }
-    }
-
-    NSString *message = error.localizedDescription ?: @"";
-    message = [message stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (message.length > 0) {
-        return [NSString stringWithFormat:@"未知 %@", message];
-    }
-
-    return @"未知";
-}
 
 // ==== 功能区块二：UI 工具 ====
 // 插件经常要"在 App 界面上盖东西"或"找到某个控件"。下面这些方法负责：
