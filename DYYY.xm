@@ -4077,10 +4077,6 @@ static CGFloat DYYYScaleValueForKey(NSString *key) {
     return scale > 0.0 ? scale : 1.0;
 }
 
-static BOOL DYYYIsLeftStackArrangedElementView(UIView *view) {
-    return view.superview != nil && [view.superview isKindOfClass:%c(AWEElementStackView)];
-}
-
 static UIView *DYYYRawElementViewFromElement(id element) {
     if (!element) {
         return nil;
@@ -6759,11 +6755,6 @@ static void DYYYRemoveAvatarView(UIView *view) {
     objc_setAssociatedObject(view, &kDYYYAvatarActionRemovedViewKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     view.hidden = YES;
     view.userInteractionEnabled = NO;
-}
-
-static void DYYYRemoveAvatarViewForSelector(id object, SEL selector) {
-    UIView *view = DYYYAvatarViewForSelector(object, selector);
-    DYYYRemoveAvatarView(view);
 }
 
 static void DYYYHideAvatarFollowLayerContents(UIView *view) {
