@@ -4898,25 +4898,30 @@ static void DYYYApplyPlayInteractionElementLayoutFromElement(id element, NSStrin
 // 尾部（"  IP属地：…" 等）原样保留。非日期文本原样返回。
 static NSString *DYYYReformatDateTextToFull(NSString *text) {
     if (text.length == 0) return text;
+    // NSDateFormatter 创建很贵，且本函数在布局路径高频调用——一次性缓存，避免热路径开销。
     static NSRegularExpression *regex;
+    static NSDateFormatter *s_inVarLen;
+    static NSDateFormatter *s_inPad;
+    static NSDateFormatter *s_out;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         regex = [NSRegularExpression regularExpressionWithPattern:@"^\\d{4}-\\d{1,2}-\\d{1,2} \\d{1,2}:\\d{2}" options:0 error:nil];
+        s_inVarLen = [[NSDateFormatter alloc] init];
+        s_inVarLen.dateFormat = @"yyyy-M-d H:mm";
+        s_inPad = [[NSDateFormatter alloc] init];
+        s_inPad.dateFormat = @"yyyy-M-d HH:mm";
+        s_out = [[NSDateFormatter alloc] init];
+        s_out.dateFormat = @"yyyy-MM-dd HH:mm";
     });
     NSTextCheckingResult *m = [regex firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
     if (!m) return text;
-    NSDateFormatter *in = [[NSDateFormatter alloc] init];
-    in.dateFormat = @"yyyy-M-d H:mm";
-    NSDate *d = [in dateFromString:[text substringWithRange:m.range]];
+    NSDate *d = [s_inVarLen dateFromString:[text substringWithRange:m.range]];
     if (!d) {
-        in.dateFormat = @"yyyy-M-d HH:mm";
-        d = [in dateFromString:[text substringWithRange:m.range]];
+        d = [s_inPad dateFromString:[text substringWithRange:m.range]];
     }
     if (!d) return text;
-    NSDateFormatter *out = [[NSDateFormatter alloc] init];
-    out.dateFormat = @"yyyy-MM-dd HH:mm";
     NSString *suffix = [text substringFromIndex:NSMaxRange(m.range)];
-    return [NSString stringWithFormat:@"%@%@", [out stringFromDate:d], suffix];
+    return [NSString stringWithFormat:@"%@%@", [s_out stringFromDate:d], suffix];
 }
 
 
