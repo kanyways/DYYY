@@ -11498,16 +11498,8 @@ static NSHashTable *processedParentViews = nil;
                                   currentImageModel = awemeModel.albumImages.firstObject;
                               }
 
-                              // 查找非.image后缀的URL
-                              NSURL *downloadURL = nil;
-                              for (NSString *urlString in currentImageModel.urlList) {
-                                  NSURL *url = [NSURL URLWithString:urlString];
-                                  NSString *pathExtension = [url.path.lowercaseString pathExtension];
-                                  if (![pathExtension isEqualToString:@"image"]) {
-                                      downloadURL = url;
-                                      break;
-                                  }
-                              }
+                              // 优先 jpeg/png/heic 等相册可直接入库的地址（webp 会触发 PHPhotosError 3302）
+                              NSURL *downloadURL = [DYYYUtils imageDownloadURLForImageModel:currentImageModel];
 
                               if (currentImageModel.clipVideo != nil) {
                                   NSURL *videoURL = [currentImageModel.clipVideo.playURL getDYYYSrcURLDownload];
@@ -11515,10 +11507,12 @@ static NSHashTable *processedParentViews = nil;
                                                         videoURL:videoURL
                                                       completion:^{
                                                       }];
-                              } else if (currentImageModel && currentImageModel.urlList.count > 0) {
+                              } else if (currentImageModel && (currentImageModel.urlList.count > 0 || currentImageModel.downloadURLList.count > 0)) {
                                   if (downloadURL) {
+                                      NSString *extension = downloadURL.path.lowercaseString.pathExtension;
+                                      BOOL needsFormatConvert = [@[ @"webp", @"heic", @"heif", @"gif" ] containsObject:extension];
                                       [DYYYManager downloadMedia:downloadURL
-                                                       mediaType:MediaTypeImage
+                                                       mediaType:(needsFormatConvert ? MediaTypeHeic : MediaTypeImage)
                                                            audio:nil
                                                       completion:^(BOOL success) {
                                                         if (success) {
@@ -11587,29 +11581,19 @@ static NSHashTable *processedParentViews = nil;
                               NSMutableArray *livePhotos = [NSMutableArray array];
 
                               for (AWEImageAlbumImageModel *imageModel in awemeModel.albumImages) {
-                                  if (imageModel.urlList.count > 0) {
-                                      // 查找非.image后缀的URL
-                                      NSURL *downloadURL = nil;
-                                      for (NSString *urlString in imageModel.urlList) {
-                                          NSURL *url = [NSURL URLWithString:urlString];
-                                          NSString *pathExtension = [url.path.lowercaseString pathExtension];
-                                          if (![pathExtension isEqualToString:@"image"]) {
-                                              downloadURL = url;
-                                              break;
-                                          }
-                                      }
+                                  NSURL *downloadURL = [DYYYUtils imageDownloadURLForImageModel:imageModel];
+                                  if (!downloadURL) {
+                                      continue;
+                                  }
 
-                                      if (!downloadURL && imageModel.urlList.count > 0) {
-                                          downloadURL = [NSURL URLWithString:imageModel.urlList.firstObject];
-                                      }
-
-                                      // 检查是否是实况照片
-                                      if (imageModel.clipVideo != nil) {
-                                          NSURL *videoURL = [imageModel.clipVideo.playURL getDYYYSrcURLDownload];
+                                  // 检查是否是实况照片
+                                  if (imageModel.clipVideo != nil) {
+                                      NSURL *videoURL = [imageModel.clipVideo.playURL getDYYYSrcURLDownload];
+                                      if (downloadURL.absoluteString.length > 0 && videoURL.absoluteString.length > 0) {
                                           [livePhotos addObject:@{@"imageURL" : downloadURL.absoluteString, @"videoURL" : videoURL.absoluteString}];
-                                      } else {
-                                          [imageURLs addObject:downloadURL.absoluteString];
                                       }
+                                  } else {
+                                      [imageURLs addObject:downloadURL.absoluteString];
                                   }
                               }
 
@@ -11684,22 +11668,8 @@ static NSHashTable *processedParentViews = nil;
 
                               // 处理所有图片和实况
                               for (AWEImageAlbumImageModel *imageModel in awemeModel.albumImages) {
-                                  if (imageModel.urlList.count > 0) {
-                                      // 查找非.image后缀的URL
-                                      NSString *bestURL = nil;
-                                      for (NSString *urlString in imageModel.urlList) {
-                                          NSURL *url = [NSURL URLWithString:urlString];
-                                          NSString *pathExtension = [url.path.lowercaseString pathExtension];
-                                          if (![pathExtension isEqualToString:@"image"]) {
-                                              bestURL = urlString;
-                                              break;
-                                          }
-                                      }
-
-                                      if (!bestURL && imageModel.urlList.count > 0) {
-                                          bestURL = imageModel.urlList.firstObject;
-                                      }
-
+                                  NSString *bestURL = [DYYYUtils imageDownloadURLForImageModel:imageModel].absoluteString;
+                                  if (bestURL.length > 0) {
                                       // 如果是实况照片，需要收集图片和视频URL
                                       if (imageModel.clipVideo != nil) {
                                           NSURL *videoURL = [imageModel.clipVideo.playURL getDYYYSrcURLDownload];

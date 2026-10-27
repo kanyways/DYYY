@@ -19,45 +19,6 @@ static BOOL gDYYYModernPanelHasCustomGroups = NO;
 // DYYY 自定义组占用前 N 个 section，第 N 个 section 是原生菜单的第一项（更多）
 static NSInteger gDYYYModernPanelCustomGroupCount = 0;
 
-// 图片下载地址选择：40.3.0 的 AWEImageAlbumImageModel 新增 downloadURLList（正式下载链），
-// 列表页（个人作品）模型常常只有它可用。优先 downloadURLList，再回退 urlList；
-// 跳过以 .image 结尾的预览链，全都带 .image 时退回第一条。
-// （临时诊断：把候选链写进 DYYYDiagnosis.log，验证完删除日志即可。）
-static NSURL *DYYYImageDownloadURL(AWEImageAlbumImageModel *imageModel) {
-    if (!imageModel) {
-        return nil;
-    }
-
-    NSMutableArray *candidates = [NSMutableArray array];
-    if (imageModel.downloadURLList.count > 0) {
-        [candidates addObjectsFromArray:imageModel.downloadURLList];
-    }
-    if (imageModel.urlList.count > 0) {
-        [candidates addObjectsFromArray:imageModel.urlList];
-    }
-
-    NSURL *fallback = nil;
-    for (id item in candidates) {
-        NSURL *url = nil;
-        if ([item isKindOfClass:[NSURL class]]) {
-            url = (NSURL *)item;
-        } else if ([item isKindOfClass:[NSString class]]) {
-            url = [NSURL URLWithString:(NSString *)item];
-        }
-        if (!url) {
-            continue;
-        }
-        if (!fallback) {
-            fallback = url;
-        }
-        NSString *pathExtension = [url.path.lowercaseString pathExtension];
-        if (![pathExtension isEqualToString:@"image"]) {
-            return url;
-        }
-    }
-    return fallback;
-}
-
 // Modern风格长按面板（新版UI）
 %hook AWEModernLongPressPanelTableViewController
 - (NSArray *)dataArray {
@@ -281,7 +242,7 @@ static NSURL *DYYYImageDownloadURL(AWEImageAlbumImageModel *imageModel) {
           }
           // 如果是实况的话
           // 优先 downloadURLList（40.3.0 正式下载链），再回退 urlList
-          NSURL *downloadURL = DYYYImageDownloadURL(currentImageModel);
+          NSURL *downloadURL = [DYYYUtils imageDownloadURLForImageModel:currentImageModel];
           [DYYYUtils diagLog:@"[DYYY保存] 当前图片 itemID=%@ type=%ld index=%ld/%lu url=%@ urlList=%@ downloadURLList=%@",
                               awemeModel.itemID,
                               (long)awemeModel.awemeType,
@@ -297,10 +258,14 @@ static NSURL *DYYYImageDownloadURL(AWEImageAlbumImageModel *imageModel) {
                                     videoURL:videoURL
                                   completion:^{
                                   }];
-          } else if (currentImageModel && currentImageModel.urlList.count > 0) {
+          } else if (currentImageModel && (currentImageModel.urlList.count > 0 || currentImageModel.downloadURLList.count > 0)) {
               if (downloadURL) {
+                  // webp/heic/gif 用 UIImage 入相册会报 PHPhotosErrorDomain 3302，
+                  // 走 MediaTypeHeic 让 saveMedia 先转成相册可识别的格式
+                  NSString *extension = downloadURL.path.lowercaseString.pathExtension;
+                  BOOL needsFormatConvert = [@[ @"webp", @"heic", @"heif", @"gif" ] containsObject:extension];
                   [DYYYManager downloadMedia:downloadURL
-                                   mediaType:MediaTypeImage
+                                   mediaType:(needsFormatConvert ? MediaTypeHeic : MediaTypeImage)
                                        audio:nil
                                   completion:^(BOOL success) {
                                     if (success) {
@@ -343,7 +308,7 @@ static NSURL *DYYYImageDownloadURL(AWEImageAlbumImageModel *imageModel) {
 
           for (AWEImageAlbumImageModel *imageModel in awemeModel.albumImages) {
               // 优先 downloadURLList（40.3.0 正式下载链），再回退 urlList
-              NSURL *downloadURL = DYYYImageDownloadURL(imageModel);
+              NSURL *downloadURL = [DYYYUtils imageDownloadURLForImageModel:imageModel];
               if (!downloadURL) {
                   [DYYYUtils diagLog:@"[DYYY保存] 批量图片跳过（无可用URL）itemID=%@ urlList=%@ downloadURLList=%@",
                                       awemeModel.itemID, imageModel.urlList, imageModel.downloadURLList];
@@ -1170,7 +1135,7 @@ static NSURL *DYYYImageDownloadURL(AWEImageAlbumImageModel *imageModel) {
           }
           // 如果是实况的话
           // 优先 downloadURLList（40.3.0 正式下载链），再回退 urlList
-          NSURL *downloadURL = DYYYImageDownloadURL(currentImageModel);
+          NSURL *downloadURL = [DYYYUtils imageDownloadURLForImageModel:currentImageModel];
           [DYYYUtils diagLog:@"[DYYY保存] 当前图片 itemID=%@ type=%ld index=%ld/%lu url=%@ urlList=%@ downloadURLList=%@",
                               awemeModel.itemID,
                               (long)awemeModel.awemeType,
@@ -1186,10 +1151,14 @@ static NSURL *DYYYImageDownloadURL(AWEImageAlbumImageModel *imageModel) {
                                     videoURL:videoURL
                                   completion:^{
                                   }];
-          } else if (currentImageModel && currentImageModel.urlList.count > 0) {
+          } else if (currentImageModel && (currentImageModel.urlList.count > 0 || currentImageModel.downloadURLList.count > 0)) {
               if (downloadURL) {
+                  // webp/heic/gif 用 UIImage 入相册会报 PHPhotosErrorDomain 3302，
+                  // 走 MediaTypeHeic 让 saveMedia 先转成相册可识别的格式
+                  NSString *extension = downloadURL.path.lowercaseString.pathExtension;
+                  BOOL needsFormatConvert = [@[ @"webp", @"heic", @"heif", @"gif" ] containsObject:extension];
                   [DYYYManager downloadMedia:downloadURL
-                                   mediaType:MediaTypeImage
+                                   mediaType:(needsFormatConvert ? MediaTypeHeic : MediaTypeImage)
                                        audio:nil
                                   completion:^(BOOL success) {
                                     if (success) {
@@ -1232,7 +1201,7 @@ static NSURL *DYYYImageDownloadURL(AWEImageAlbumImageModel *imageModel) {
 
           for (AWEImageAlbumImageModel *imageModel in awemeModel.albumImages) {
               // 优先 downloadURLList（40.3.0 正式下载链），再回退 urlList
-              NSURL *downloadURL = DYYYImageDownloadURL(imageModel);
+              NSURL *downloadURL = [DYYYUtils imageDownloadURLForImageModel:imageModel];
               if (!downloadURL) {
                   [DYYYUtils diagLog:@"[DYYY保存] 批量图片跳过（无可用URL）itemID=%@ urlList=%@ downloadURLList=%@",
                                       awemeModel.itemID, imageModel.urlList, imageModel.downloadURLList];

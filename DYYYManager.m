@@ -1049,7 +1049,11 @@ static NSString *DYYYAlbumDescriptionForAwemeModel(AWEAwemeModel *awemeModel, NS
           NSURLSessionDownloadTask *downloadTask = [session downloadTaskWithURL:url];
           [[DYYYManager shared].downloadTasks setObject:downloadTask forKey:downloadID];
           [[DYYYManager shared].taskProgressMap setObject:@0.0 forKey:downloadID];
-          [[DYYYManager shared] setMediaType:MediaTypeImage forDownloadID:downloadID];
+          // webp/heic/gif 直接按 UIImage 入相册会报 PHPhotosErrorDomain 3302，
+          // 交给 MediaTypeHeic 路径先转成相册可识别的格式
+          NSString *urlExtension = url.path.lowercaseString.pathExtension;
+          BOOL needsFormatConvert = [@[ @"webp", @"heic", @"heif", @"gif" ] containsObject:urlExtension];
+          [[DYYYManager shared] setMediaType:(needsFormatConvert ? MediaTypeHeic : MediaTypeImage) forDownloadID:downloadID];
           if (batchAlbumDescription.length > 0) {
               [[DYYYManager shared].albumDescriptionMap setObject:batchAlbumDescription forKey:downloadID];
           }

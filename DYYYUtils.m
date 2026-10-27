@@ -1219,6 +1219,50 @@ static NSString *DYYYJSONStringFromObject(id object) {
 // 生成 GIF / 保存到相册、WebP/HEIC 转 GIF、视频合并音频。
 #pragma mark - Public Media Helper Methods (公共媒体工具方法)
 
+// 图集图片下载地址：40.3.0 的 urlList 常见顺序是 [webp, jpeg]，webp 交给
+// UIImage 入相册会报 PHPhotosErrorDomain 3302（个人作品/私密作品尤其明显），
+// 首页模型往往直接给 jpeg，所以出现"首页能存、个人页不能"。
+// 这里优先选相册可直接入库的格式；downloadURLList 是带水印链，只作兜底。
++ (NSURL *)imageDownloadURLForImageModel:(AWEImageAlbumImageModel *)imageModel {
+    if (!imageModel) {
+        return nil;
+    }
+
+    NSArray *directExtensions = @[ @"jpeg", @"jpg", @"png", @"heic", @"heif" ];
+    NSMutableArray *candidates = [NSMutableArray array];
+    if (imageModel.urlList.count > 0) {
+        [candidates addObjectsFromArray:imageModel.urlList];
+    }
+    if (imageModel.downloadURLList.count > 0) {
+        [candidates addObjectsFromArray:imageModel.downloadURLList];
+    }
+
+    NSURL *firstNonPreview = nil;
+    NSURL *firstAny = nil;
+    for (id item in candidates) {
+        NSURL *url = nil;
+        if ([item isKindOfClass:[NSURL class]]) {
+            url = (NSURL *)item;
+        } else if ([item isKindOfClass:[NSString class]]) {
+            url = [NSURL URLWithString:(NSString *)item];
+        }
+        if (!url) {
+            continue;
+        }
+        if (!firstAny) {
+            firstAny = url;
+        }
+        NSString *pathExtension = [url.path.lowercaseString pathExtension];
+        if ([directExtensions containsObject:pathExtension]) {
+            return url;
+        }
+        if (!firstNonPreview && ![pathExtension isEqualToString:@"image"]) {
+            firstNonPreview = url;
+        }
+    }
+    return firstNonPreview ?: firstAny;
+}
+
 // 通过"魔数（magic bytes）"识别文件真实格式：每种格式开头几个字节是固定的
 // 特征值（GIF 的 "GIF8"、PNG 的 0x89PNG、JPEG 的 0xFFD8、WebP 的 RIFF....WEBP、
 // HEIC 的 ftyp 等）。之所以不信任文件扩展名——抖音下载的资源扩展名可能乱标，

@@ -167,6 +167,13 @@ NS_ASSUME_NONNULL_BEGIN
 #pragma mark - Public Media Helper Methods (公共媒体工具方法)
 
 /**
+ * 从图集模型里挑一个"相册可直接入库"的图片下载地址（40.3.0）。
+ * 个人作品/私密作品的 urlList 常是 [webp, jpeg]，webp 走 UIImage 入相册会报
+ * PHPhotosErrorDomain 3302；这里优先 jpeg/jpg/png/heic/heif，再退其他非 .image 链。
+ */
++ (NSURL *)imageDownloadURLForImageModel:(AWEImageAlbumImageModel *)imageModel;
+
+/**
  * 根据文件头判断媒体格式（webp/heic/heif/gif/png/jpeg）
  */
 + (NSString *)detectFileFormat:(NSURL *)fileURL;
