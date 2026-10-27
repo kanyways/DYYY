@@ -790,6 +790,26 @@ static NSInteger gDYYYModernPanelCustomGroupCount = 0;
 }
 %end
 
+// 修复Modern风格长按面板卡片 cell 复用后的文案/动作错位
+// 两个卡片 cell（Interactive/HorizontalSetting）按重用标识复用；原
+// -setLongPressViewGroupModel: 只更新 dataArray，不刷新内部 collectionView。
+// 复用时会继续显示上一组卡片的文案，而点击 didSelectItem 按新 dataArray 取
+// action → 出现“保存音频变存图、过滤文案变批量保存”这类文案与功能错位。
+// 这里在模型更新后强制刷新内部 collectionView，保证显示的 VM 与点击取到的一致。
+%hook AWEModernLongPressInteractiveCell
+- (void)setLongPressViewGroupModel:(AWELongPressPanelViewGroupModel *)model {
+    %orig;
+    [self.collectionView reloadData];
+}
+%end
+
+%hook AWEModernLongPressHorizontalSettingCell
+- (void)setLongPressViewGroupModel:(AWELongPressPanelViewGroupModel *)model {
+    %orig;
+    [self.collectionView reloadData];
+}
+%end
+
 // 现代长按面板：原生菜单项点击兜底
 // 40.3.0 的 -tableView:didSelectRowAtIndexPath: 用 dataArray[section] 找组，
 // 且只对 groupType 0/10 执行 action。DYYY 把自定义组插到 dataArray 最前面后
