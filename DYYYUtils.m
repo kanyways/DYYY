@@ -1233,8 +1233,12 @@ static NSString *DYYYJSONStringFromObject(id object) {
     if (imageModel.urlList.count > 0) {
         [candidates addObjectsFromArray:imageModel.urlList];
     }
-    if (imageModel.downloadURLList.count > 0) {
-        [candidates addObjectsFromArray:imageModel.downloadURLList];
+    // 老版本（39.9.0 及更早）可能没有该字段，运行时探测避免 unrecognized selector
+    if ([imageModel respondsToSelector:@selector(downloadURLList)]) {
+        NSArray *downloadURLList = [imageModel downloadURLList];
+        if (downloadURLList.count > 0) {
+            [candidates addObjectsFromArray:downloadURLList];
+        }
     }
 
     NSURL *firstNonPreview = nil;
