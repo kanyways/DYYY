@@ -1267,6 +1267,40 @@ static NSString *DYYYJSONStringFromObject(id object) {
     return firstNonPreview ?: firstAny;
 }
 
+// 视频下载地址：个人作品/私密作品的列表模型可能没有 h264URL，旧逻辑只读 h264
+// 会静默不下载。按 h264URL → downloadURL → playURL → playLowBitURL 依次回退；
+// 每个 URLModel 用 getDYYYSrcURLDownload 挑（优先 video_mp4 / .mp3 / .jpeg）。
++ (NSURL *)videoDownloadURLForVideoModel:(AWEVideoModel *)videoModel {
+    if (!videoModel) {
+        return nil;
+    }
+
+    NSMutableArray<AWEURLModel *> *urlModels = [NSMutableArray array];
+    if (videoModel.h264URL) {
+        [urlModels addObject:videoModel.h264URL];
+    }
+    if ([videoModel respondsToSelector:@selector(downloadURL)]) {
+        AWEURLModel *downloadURL = [videoModel downloadURL];
+        if (downloadURL) {
+            [urlModels addObject:downloadURL];
+        }
+    }
+    if (videoModel.playURL) {
+        [urlModels addObject:videoModel.playURL];
+    }
+    if (videoModel.playLowBitURL) {
+        [urlModels addObject:videoModel.playLowBitURL];
+    }
+
+    for (AWEURLModel *urlModel in urlModels) {
+        NSURL *url = [urlModel getDYYYSrcURLDownload];
+        if (url) {
+            return url;
+        }
+    }
+    return nil;
+}
+
 // 通过"魔数（magic bytes）"识别文件真实格式：每种格式开头几个字节是固定的
 // 特征值（GIF 的 "GIF8"、PNG 的 0x89PNG、JPEG 的 0xFFD8、WebP 的 RIFF....WEBP、
 // HEIC 的 ftyp 等）。之所以不信任文件扩展名——抖音下载的资源扩展名可能乱标，

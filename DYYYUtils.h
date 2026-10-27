@@ -174,6 +174,12 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSURL *)imageDownloadURLForImageModel:(AWEImageAlbumImageModel *)imageModel;
 
 /**
+ * 从视频模型里挑可下载地址（40.3.0）：h264URL → downloadURL → playURL → playLowBitURL。
+ * 个人作品列表模型可能没有 h264URL，只按 h264 取会导致“保存视频”静默失败。
+ */
++ (NSURL *)videoDownloadURLForVideoModel:(AWEVideoModel *)videoModel;
+
+/**
  * 根据文件头判断媒体格式（webp/heic/heif/gif/png/jpeg）
  */
 + (NSString *)detectFileFormat:(NSURL *)fileURL;
