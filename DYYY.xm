@@ -11552,14 +11552,16 @@ static NSHashTable *processedParentViews = nil;
                                                       }];
                               }
                           } else {
-                              // h264URL → downloadURL → playURL → playLowBitURL：列表页模型可能没有 h264
-                              NSURL *url = [DYYYUtils videoDownloadURLForVideoModel:videoModel];
-                              if (url) {
-                                  [DYYYManager downloadMedia:url
-                                                   mediaType:MediaTypeVideo
-                                                       audio:audioURL
-                                                  completion:^(BOOL success){
-                                                  }];
+                              // 多个 CDN 地址依次尝试：某个 host 连不上时换备用链
+                              NSArray<NSURL *> *videoURLs = [DYYYUtils videoDownloadURLsForVideoModel:videoModel];
+                              if (videoURLs.count > 0) {
+                                  [DYYYManager downloadVideoWithURLs:videoURLs
+                                                            audioURL:audioURL
+                                                          completion:^(BOOL success) {
+                                                            if (!success) {
+                                                                [DYYYUtils showToast:@"视频下载失败"];
+                                                            }
+                                                          }];
                               } else {
                                   [DYYYUtils showToast:@"没有找到可下载的视频地址"];
                               }

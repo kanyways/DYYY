@@ -1267,17 +1267,19 @@ static NSString *DYYYJSONStringFromObject(id object) {
     return firstNonPreview ?: firstAny;
 }
 
-// 视频下载地址：个人作品/私密作品的列表模型可能没有 h264URL，旧逻辑只读 h264
-// 会静默不下载。按 h264URL → downloadURL → playURL → playLowBitURL 依次回退；
-// 每个 URLModel 用 getDYYYSrcURLDownload 挑（优先 video_mp4 / .mp3 / .jpeg）。
-+ (NSURL *)videoDownloadURLForVideoModel:(AWEVideoModel *)videoModel {
+// 视频下载地址候选项：个人作品/私密作品的列表模型可能没有 h264URL，且单个
+// host（video-cn.snssdk.com）可能连不上（NSURLError -1004），需要换
+// video-edge-all.snssdk.com 之类的备用链重试。
+// 顺序：h264URL → downloadURL → playURL → playLowBitURL；每个 URLModel 再展开
+// originURLList 里的 video_mp4 链，按出现顺序去重。
++ (NSArray<NSURL *> *)videoDownloadURLsForVideoModel:(AWEVideoModel *)videoModel {
     if (!videoModel) {
-        return nil;
+        return @[];
     }
 
     NSMutableArray<AWEURLModel *> *urlModels = [NSMutableArray array];
     if (videoModel.h264URL) {
-        [urlModels addObject:videoModel.h264URL];
+        [urlModels addObject:(AWEURLModel *)videoModel.h264URL];
     }
     if ([videoModel respondsToSelector:@selector(downloadURL)]) {
         AWEURLModel *downloadURL = [videoModel downloadURL];
@@ -1292,13 +1294,27 @@ static NSString *DYYYJSONStringFromObject(id object) {
         [urlModels addObject:videoModel.playLowBitURL];
     }
 
+    NSMutableArray<NSURL *> *urls = [NSMutableArray array];
     for (AWEURLModel *urlModel in urlModels) {
-        NSURL *url = [urlModel getDYYYSrcURLDownload];
-        if (url) {
-            return url;
+        NSURL *bestURL = [urlModel getDYYYSrcURLDownload];
+        if (bestURL && ![urls containsObject:bestURL]) {
+            [urls addObject:bestURL];
+        }
+        for (id item in urlModel.originURLList) {
+            if (![item isKindOfClass:[NSString class]]) {
+                continue;
+            }
+            NSString *urlString = (NSString *)item;
+            if (![urlString containsString:@"video_mp4"]) {
+                continue;
+            }
+            NSURL *url = [NSURL URLWithString:urlString];
+            if (url && ![urls containsObject:url]) {
+                [urls addObject:url];
+            }
         }
     }
-    return nil;
+    return urls;
 }
 
 // 通过"魔数（magic bytes）"识别文件真实格式：每种格式开头几个字节是固定的

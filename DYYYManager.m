@@ -827,6 +827,42 @@ static NSString *DYYYAlbumDescriptionForAwemeModel(AWEAwemeModel *awemeModel, NS
     }
 }
 
+// 视频候选链重试：DYYY 保存视频会拿到多个 CDN 地址（video-cn / video-edge-all 等），
+// 单个 host 偶发连不上（NSURLError -1004）时换下一条，全部失败才算失败。
++ (void)downloadVideoWithURLs:(NSArray<NSURL *> *)urls audioURL:(NSURL *)audioURL completion:(void (^)(BOOL success))completion {
+    if (urls.count == 0) {
+        if (completion) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+              completion(NO);
+            });
+        }
+        return;
+    }
+
+    __block void (^attempt)(NSUInteger);
+    attempt = ^(NSUInteger index) {
+      if (index >= urls.count) {
+          if (completion) {
+              completion(NO);
+          }
+          return;
+      }
+      [self downloadMedia:urls[index]
+                mediaType:MediaTypeVideo
+                    audio:audioURL
+               completion:^(BOOL success) {
+                 if (success) {
+                     if (completion) {
+                         completion(YES);
+                     }
+                 } else {
+                     attempt(index + 1);
+                 }
+               }];
+    };
+    attempt(0);
+}
+
 + (void)downloadMedia:(NSURL *)url mediaType:(MediaType)mediaType audio:(NSURL *)audioURL completion:(void (^)(BOOL success))completion {
     // 下载一开始就取走说明文字：等下载完再取，用户可能已经翻到别的作品了。
     NSString *albumDescription = [self currentAlbumDescription];

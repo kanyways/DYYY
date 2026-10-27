@@ -81,6 +81,11 @@
 + (void)downloadMedia:(NSURL *)url mediaType:(MediaType)mediaType audio:(NSURL *)audioURL completion:(void (^)(BOOL success))completion;
 
 /**
+ * 按候选 URL 顺序下载视频：某个 CDN host 连不上（如 -1004）时自动换下一条重试。
+ */
++ (void)downloadVideoWithURLs:(NSArray<NSURL *> *)urls audioURL:(NSURL *)audioURL completion:(void (^)(BOOL success))completion;
+
+/**
  * 带进度的媒体下载
  * @param url 媒体URL
  * @param mediaType 媒体类型

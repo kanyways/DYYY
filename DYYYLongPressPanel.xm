@@ -156,14 +156,16 @@ static NSInteger gDYYYModernPanelCustomGroupCount = 0;
               audioURL = [NSURL URLWithString:musicModel.playURL.originURLList.firstObject];
           }
 
-          // h264URL → downloadURL → playURL → playLowBitURL：列表页模型可能没有 h264
-          NSURL *videoURL = [DYYYUtils videoDownloadURLForVideoModel:videoModel];
-          if (videoURL) {
-              [DYYYManager downloadMedia:videoURL
-                               mediaType:MediaTypeVideo
-                                   audio:audioURL
-                              completion:^(BOOL success){
-                              }];
+          // 多个 CDN 地址依次尝试：某个 host（video-cn）连不上时换 video-edge-all 等备用链
+          NSArray<NSURL *> *videoURLs = [DYYYUtils videoDownloadURLsForVideoModel:videoModel];
+          if (videoURLs.count > 0) {
+              [DYYYManager downloadVideoWithURLs:videoURLs
+                                        audioURL:audioURL
+                                      completion:^(BOOL success) {
+                                        if (!success) {
+                                            [DYYYUtils showToast:@"视频下载失败"];
+                                        }
+                                      }];
           } else {
               [DYYYUtils showToast:@"没有找到可下载的视频地址"];
           }
@@ -1050,14 +1052,16 @@ static NSInteger gDYYYModernPanelCustomGroupCount = 0;
               audioURL = [NSURL URLWithString:musicModel.playURL.originURLList.firstObject];
           }
 
-          // h264URL → downloadURL → playURL → playLowBitURL：列表页模型可能没有 h264
-          NSURL *videoURL = [DYYYUtils videoDownloadURLForVideoModel:videoModel];
-          if (videoURL) {
-              [DYYYManager downloadMedia:videoURL
-                               mediaType:MediaTypeVideo
-                                   audio:audioURL
-                              completion:^(BOOL success){
-                              }];
+          // 多个 CDN 地址依次尝试：某个 host（video-cn）连不上时换 video-edge-all 等备用链
+          NSArray<NSURL *> *videoURLs = [DYYYUtils videoDownloadURLsForVideoModel:videoModel];
+          if (videoURLs.count > 0) {
+              [DYYYManager downloadVideoWithURLs:videoURLs
+                                        audioURL:audioURL
+                                      completion:^(BOOL success) {
+                                        if (!success) {
+                                            [DYYYUtils showToast:@"视频下载失败"];
+                                        }
+                                      }];
           } else {
               [DYYYUtils showToast:@"没有找到可下载的视频地址"];
           }
