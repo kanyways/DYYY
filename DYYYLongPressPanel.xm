@@ -12,6 +12,11 @@
 %property(nonatomic, assign) BOOL isDYYYCustomGroup;
 %end
 
+// 当前现代长按面板是否注入了 DYYY 自定义组。
+// 为 NO 时（用户关掉全部长按功能）点击/高度 hook 全部走原生逻辑，保持默认表现。
+// 只在主线程读写：面板数据、布局、点击都发生在主线程。
+static BOOL gDYYYModernPanelHasCustomGroups = NO;
+
 // Modern风格长按面板（新版UI）
 %hook AWEModernLongPressPanelTableViewController
 - (NSArray *)dataArray {
@@ -123,6 +128,7 @@
 
     // 如果没有任何功能启用，仅使用官方按钮
     if (!hasAnyFeatureEnabled) {
+        gDYYYModernPanelHasCustomGroups = NO;
         return originalArray;
     }
 
@@ -743,6 +749,7 @@
         [customGroups addObject:secondRowGroup];
     }
 
+    gDYYYModernPanelHasCustomGroups = (customGroups.count > 0);
     return [customGroups arrayByAddingObjectsFromArray:originalArray];
 }
 %end
@@ -779,9 +786,94 @@
 }
 %end
 
+// 现代长按面板：原生菜单项点击兜底
+// 40.3.0 的 -tableView:didSelectRowAtIndexPath: 用 dataArray[section] 找组，
+// 且只对 groupType 0/10 执行 action。DYYY 把自定义组插到 dataArray 最前面后
+// section 与组错位，原生项（更多/批量管理/置顶/权限设置…）取到的是自定义组，
+// 类型不是 0/10，于是整片原生菜单点了没反应。
+// 这里改为按被点中的 cell 直接取 VM 执行 action，绕开 section 索引；
+// 网格卡片行由内部 collectionView 自己分发，不在这里重复执行。
+%hook AWEModernLongPressPanelTableViewController
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (!gDYYYModernPanelHasCustomGroups) {
+        %orig;
+        return;
+    }
+
+    UITableViewCell *cell = [tableView cellForRowAtIndexPath:indexPath];
+    if (!cell) {
+        %orig;
+        return;
+    }
+
+    // 原生列表行/提醒行：cell 上挂着对应 VM
+    if ([cell isKindOfClass:%c(AWEModernLongPressSettingCell)] || [cell isKindOfClass:%c(AWEModernLongPressReminderCell)]) {
+        AWELongPressPanelBaseViewModel *viewModel = [(AWEModernLongPressSettingCell *)cell longPressPanelVM];
+        void (^action)(void) = viewModel.action;
+        [tableView deselectRowAtIndexPath:indexPath animated:NO];
+        if (action) {
+            action();
+        }
+        return;
+    }
+
+    // DYYY 自定义卡片行：点击由卡片内部 collectionView 的 didSelectItem 处理
+    if ([cell isKindOfClass:%c(AWEModernLongPressInteractiveCell)] || [cell isKindOfClass:%c(AWEModernLongPressHorizontalSettingCell)]) {
+        [tableView deselectRowAtIndexPath:indexPath animated:NO];
+        return;
+    }
+
+    %orig;
+}
+%end
+
+// 现代长按面板：统一原生列表行高度
+// 原生行按 groupType 取高度：普通行 52，另有 69/82/84 等。没有副标题、也没有
+// 自定义子视图的高行只会留下大段空白（截图里原生菜单间隔忽大忽小）。
+// cellHeight 是组模型上的计算属性，表格和面板高度都走这里，直接在这一层收口：
+// 自定义卡片行、提醒行、图标网格行保持原高度；普通列表行统一压到 52pt。
+%hook AWELongPressPanelViewGroupModel
+- (long long)cellHeight {
+    long long height = %orig;
+    if (!gDYYYModernPanelHasCustomGroups) {
+        return height;
+    }
+    if (self.isDYYYCustomGroup) {
+        return height;
+    }
+
+    // 10=提醒行，11/12=图标网格行，保持原生高度
+    unsigned long long groupType = self.groupType;
+    if (groupType == 10 || groupType == 11 || groupType == 12) {
+        return height;
+    }
+
+    // 现代 SettingCell 只渲染 describeString/duxIconName/subView，不渲染 subtitleString，
+    // 所以带副标题的高行同样是空白。带自定义子视图、或没有图标/文字的组保留原高度，
+    // 避免裁切内容和误伤头像行等特殊行。
+    for (id item in self.groupArr) {
+        if (![item isKindOfClass:%c(AWELongPressPanelBaseViewModel)]) {
+            return height;
+        }
+        AWELongPressPanelBaseViewModel *viewModel = (AWELongPressPanelBaseViewModel *)item;
+        BOOL hasExtraContent = viewModel.reminderAttrDescribeString != nil || viewModel.leftSubView != nil || viewModel.subView != nil;
+        BOOL hasTitleAndIcon = viewModel.describeString.length > 0 && (viewModel.duxIconName.length > 0 || viewModel.iconImage != nil || viewModel.iconImageURL.count > 0);
+        if (hasExtraContent || !hasTitleAndIcon) {
+            return height;
+        }
+    }
+
+    // 原生普通行原高 52/69/82 不等，统一压到 48，让"更多"以下的列表节奏一致
+    return 48;
+}
+%end
+
 // 经典风格长按面板
 %hook AWELongPressPanelTableViewController
 - (NSArray *)dataArray {
+    // 经典面板不使用现代面板的点击/高度修复，清掉标记避免沿用现代面板的状态
+    gDYYYModernPanelHasCustomGroups = NO;
+
     // 面板一弹出就记下当前作品，面板里的保存项落到相册时才带得上说明文字。
     [DYYYManager setAlbumDescriptionContextWithAwemeModel:self.awemeModel];
 

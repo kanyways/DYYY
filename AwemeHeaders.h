@@ -222,9 +222,16 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 
 @interface AWELongPressPanelBaseViewModel : NSObject
 @property(nonatomic, copy) NSString *describeString;
+@property(nonatomic, copy) NSString *subtitleString;
+@property(nonatomic, strong) NSAttributedString *reminderAttrDescribeString;
+@property(nonatomic, strong) UIView *subView;
+@property(nonatomic, strong) UIView *leftSubView;
+@property(nonatomic, strong) UIImage *iconImage;
+@property(nonatomic, strong) NSArray *iconImageURL;
 @property(nonatomic, assign) NSInteger enterMethod;
 @property(nonatomic, assign) NSInteger actionType;
 @property(nonatomic, assign) BOOL showIfNeed;
+@property(nonatomic, assign) BOOL disableInteraction;
 @property(nonatomic, copy) NSString *duxIconName;
 @property(nonatomic, copy) void (^action)(void);
 @property(nonatomic) BOOL isModern;
@@ -575,6 +582,18 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @property(nonatomic, strong) UICollectionView *collectionView;
 @property(nonatomic, strong) NSArray *dataArray;
 @property(nonatomic, strong) AWELongPressPanelViewGroupModel *longPressViewGroupModel;
+@end
+
+// 现代长按面板的原生列表行（图标 + 文字），点击后由表格 didSelect 调用 VM.action。
+// 40.3.0 起表格按 dataArray[section] 取组分发，DYYY 在前面插入自定义组后
+// 原生行会点不中，改为直接从 cell 取 VM（见 DYYYLongPressPanel.xm）。
+@interface AWEModernLongPressSettingCell : UITableViewCell
+@property(nonatomic, strong) AWELongPressPanelBaseViewModel *longPressPanelVM;
+@end
+
+// 提醒类行（带关闭按钮），同样暴露 longPressPanelVM
+@interface AWEModernLongPressReminderCell : UITableViewCell
+@property(nonatomic, strong) AWELongPressPanelBaseViewModel *longPressPanelVM;
 @end
 
 @interface AWEModernLongPressHorizontalSettingItemCell : UICollectionViewCell
