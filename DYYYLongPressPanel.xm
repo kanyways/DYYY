@@ -16,6 +16,8 @@
 // 为 NO 时（用户关掉全部长按功能）点击/高度 hook 全部走原生逻辑，保持默认表现。
 // 只在主线程读写：面板数据、布局、点击都发生在主线程。
 static BOOL gDYYYModernPanelHasCustomGroups = NO;
+// DYYY 自定义组占用前 N 个 section，第 N 个 section 是原生菜单的第一项（更多）
+static NSInteger gDYYYModernPanelCustomGroupCount = 0;
 
 // Modern风格长按面板（新版UI）
 %hook AWEModernLongPressPanelTableViewController
@@ -129,6 +131,7 @@ static BOOL gDYYYModernPanelHasCustomGroups = NO;
     // 如果没有任何功能启用，仅使用官方按钮
     if (!hasAnyFeatureEnabled) {
         gDYYYModernPanelHasCustomGroups = NO;
+        gDYYYModernPanelCustomGroupCount = 0;
         return originalArray;
     }
 
@@ -750,6 +753,7 @@ static BOOL gDYYYModernPanelHasCustomGroups = NO;
     }
 
     gDYYYModernPanelHasCustomGroups = (customGroups.count > 0);
+    gDYYYModernPanelCustomGroupCount = customGroups.count;
     return [customGroups arrayByAddingObjectsFromArray:originalArray];
 }
 %end
@@ -868,11 +872,25 @@ static BOOL gDYYYModernPanelHasCustomGroups = NO;
 }
 %end
 
+// 现代长按面板：拉开自定义卡片区与原生菜单的间距
+// 前 N 个 section 是 DYYY 自定义组，第 N 个 section 是原生菜单第一项（更多）。
+// 在这里给第一个原生 section 加 16pt 空表头（viewForHeaderInSection 返回的是
+// 普通 UIView，不会出现第二个拖拽把手），其余 section 完全走原生高度。
+%hook AWEModernLongPressPanelTableViewController
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+    if (gDYYYModernPanelHasCustomGroups && section == gDYYYModernPanelCustomGroupCount) {
+        return 16.0;
+    }
+    return %orig;
+}
+%end
+
 // 经典风格长按面板
 %hook AWELongPressPanelTableViewController
 - (NSArray *)dataArray {
     // 经典面板不使用现代面板的点击/高度修复，清掉标记避免沿用现代面板的状态
     gDYYYModernPanelHasCustomGroups = NO;
+    gDYYYModernPanelCustomGroupCount = 0;
 
     // 面板一弹出就记下当前作品，面板里的保存项落到相册时才带得上说明文字。
     [DYYYManager setAlbumDescriptionContextWithAwemeModel:self.awemeModel];
