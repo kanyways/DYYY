@@ -25,6 +25,11 @@ NS_ASSUME_NONNULL_BEGIN
 /** 清空设置缓存：设置面板写入后必须调用，否则修改不生效。 */
 + (void)invalidateSettingsCache;
 
+#pragma mark - 临时诊断日志（真机未越狱：NSLog + Documents/DYYYDiagnosis.log）
+
+/** 双写诊断日志；验证完删除调用即可。 */
++ (void)diagLog:(NSString *)format, ... NS_FORMAT_FUNCTION(1, 2);
+
 #pragma mark - Public Model Filtering Utilities (公共模型过滤工具)
 
 /** 使用抖音模型自身的广告判定及明确广告字段识别广告作品。 */

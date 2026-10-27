@@ -79,6 +79,7 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 
 @interface AWEImageAlbumImageModel : NSObject
 @property(nonatomic, strong) NSArray *urlList;
+@property(nonatomic, strong) NSArray *downloadURLList;
 @property(retain, nonatomic) AWEVideoModel *clipVideo;
 @end
 

@@ -19,6 +19,45 @@ static BOOL gDYYYModernPanelHasCustomGroups = NO;
 // DYYY 自定义组占用前 N 个 section，第 N 个 section 是原生菜单的第一项（更多）
 static NSInteger gDYYYModernPanelCustomGroupCount = 0;
 
+// 图片下载地址选择：40.3.0 的 AWEImageAlbumImageModel 新增 downloadURLList（正式下载链），
+// 列表页（个人作品）模型常常只有它可用。优先 downloadURLList，再回退 urlList；
+// 跳过以 .image 结尾的预览链，全都带 .image 时退回第一条。
+// （临时诊断：把候选链写进 DYYYDiagnosis.log，验证完删除日志即可。）
+static NSURL *DYYYImageDownloadURL(AWEImageAlbumImageModel *imageModel) {
+    if (!imageModel) {
+        return nil;
+    }
+
+    NSMutableArray *candidates = [NSMutableArray array];
+    if (imageModel.downloadURLList.count > 0) {
+        [candidates addObjectsFromArray:imageModel.downloadURLList];
+    }
+    if (imageModel.urlList.count > 0) {
+        [candidates addObjectsFromArray:imageModel.urlList];
+    }
+
+    NSURL *fallback = nil;
+    for (id item in candidates) {
+        NSURL *url = nil;
+        if ([item isKindOfClass:[NSURL class]]) {
+            url = (NSURL *)item;
+        } else if ([item isKindOfClass:[NSString class]]) {
+            url = [NSURL URLWithString:(NSString *)item];
+        }
+        if (!url) {
+            continue;
+        }
+        if (!fallback) {
+            fallback = url;
+        }
+        NSString *pathExtension = [url.path.lowercaseString pathExtension];
+        if (![pathExtension isEqualToString:@"image"]) {
+            return url;
+        }
+    }
+    return fallback;
+}
+
 // Modern风格长按面板（新版UI）
 %hook AWEModernLongPressPanelTableViewController
 - (NSArray *)dataArray {
@@ -241,16 +280,16 @@ static NSInteger gDYYYModernPanelCustomGroupCount = 0;
               currentImageModel = awemeModel.albumImages.firstObject;
           }
           // 如果是实况的话
-          // 查找非.image后缀的URL
-          NSURL *downloadURL = nil;
-          for (NSString *urlString in currentImageModel.urlList) {
-              NSURL *url = [NSURL URLWithString:urlString];
-              NSString *pathExtension = [url.path.lowercaseString pathExtension];
-              if (![pathExtension isEqualToString:@"image"]) {
-                  downloadURL = url;
-                  break;
-              }
-          }
+          // 优先 downloadURLList（40.3.0 正式下载链），再回退 urlList
+          NSURL *downloadURL = DYYYImageDownloadURL(currentImageModel);
+          [DYYYUtils diagLog:@"[DYYY保存] 当前图片 itemID=%@ type=%ld index=%ld/%lu url=%@ urlList=%@ downloadURLList=%@",
+                              awemeModel.itemID,
+                              (long)awemeModel.awemeType,
+                              (long)awemeModel.currentImageIndex,
+                              (unsigned long)awemeModel.albumImages.count,
+                              downloadURL.absoluteString,
+                              currentImageModel.urlList,
+                              currentImageModel.downloadURLList];
 
           if (currentImageModel.clipVideo != nil) {
               NSURL *videoURL = [currentImageModel.clipVideo.playURL getDYYYSrcURLDownload];
@@ -303,29 +342,24 @@ static NSInteger gDYYYModernPanelCustomGroupCount = 0;
           NSMutableArray *livePhotos = [NSMutableArray array];
 
           for (AWEImageAlbumImageModel *imageModel in awemeModel.albumImages) {
-              if (imageModel.urlList.count > 0) {
-                  // 查找非.image后缀的URL
-                  NSURL *downloadURL = nil;
-                  for (NSString *urlString in imageModel.urlList) {
-                      NSURL *url = [NSURL URLWithString:urlString];
-                      NSString *pathExtension = [url.path.lowercaseString pathExtension];
-                      if (![pathExtension isEqualToString:@"image"]) {
-                          downloadURL = url;
-                          break;
-                      }
-                  }
+              // 优先 downloadURLList（40.3.0 正式下载链），再回退 urlList
+              NSURL *downloadURL = DYYYImageDownloadURL(imageModel);
+              if (!downloadURL) {
+                  [DYYYUtils diagLog:@"[DYYY保存] 批量图片跳过（无可用URL）itemID=%@ urlList=%@ downloadURLList=%@",
+                                      awemeModel.itemID, imageModel.urlList, imageModel.downloadURLList];
+                  continue;
+              }
+              [DYYYUtils diagLog:@"[DYYY保存] 批量图片 itemID=%@ url=%@ urlList=%@ downloadURLList=%@",
+                                  awemeModel.itemID, downloadURL.absoluteString, imageModel.urlList, imageModel.downloadURLList];
 
-                  if (!downloadURL && imageModel.urlList.count > 0) {
-                      downloadURL = [NSURL URLWithString:imageModel.urlList.firstObject];
-                  }
-
-                  // 检查是否是实况照片
-                  if (imageModel.clipVideo != nil) {
-                      NSURL *videoURL = [imageModel.clipVideo.playURL getDYYYSrcURLDownload];
+              // 检查是否是实况照片
+              if (imageModel.clipVideo != nil) {
+                  NSURL *videoURL = [imageModel.clipVideo.playURL getDYYYSrcURLDownload];
+                  if (downloadURL.absoluteString.length > 0 && videoURL.absoluteString.length > 0) {
                       [livePhotos addObject:@{@"imageURL" : downloadURL.absoluteString, @"videoURL" : videoURL.absoluteString}];
-                  } else {
-                      [imageURLs addObject:downloadURL.absoluteString];
                   }
+              } else {
+                  [imageURLs addObject:downloadURL.absoluteString];
               }
           }
 
@@ -1135,16 +1169,16 @@ static NSInteger gDYYYModernPanelCustomGroupCount = 0;
               currentImageModel = awemeModel.albumImages.firstObject;
           }
           // 如果是实况的话
-          // 查找非.image后缀的URL
-          NSURL *downloadURL = nil;
-          for (NSString *urlString in currentImageModel.urlList) {
-              NSURL *url = [NSURL URLWithString:urlString];
-              NSString *pathExtension = [url.path.lowercaseString pathExtension];
-              if (![pathExtension isEqualToString:@"image"]) {
-                  downloadURL = url;
-                  break;
-              }
-          }
+          // 优先 downloadURLList（40.3.0 正式下载链），再回退 urlList
+          NSURL *downloadURL = DYYYImageDownloadURL(currentImageModel);
+          [DYYYUtils diagLog:@"[DYYY保存] 当前图片 itemID=%@ type=%ld index=%ld/%lu url=%@ urlList=%@ downloadURLList=%@",
+                              awemeModel.itemID,
+                              (long)awemeModel.awemeType,
+                              (long)awemeModel.currentImageIndex,
+                              (unsigned long)awemeModel.albumImages.count,
+                              downloadURL.absoluteString,
+                              currentImageModel.urlList,
+                              currentImageModel.downloadURLList];
 
           if (currentImageModel.clipVideo != nil) {
               NSURL *videoURL = [currentImageModel.clipVideo.playURL getDYYYSrcURLDownload];
@@ -1197,29 +1231,24 @@ static NSInteger gDYYYModernPanelCustomGroupCount = 0;
           NSMutableArray *livePhotos = [NSMutableArray array];
 
           for (AWEImageAlbumImageModel *imageModel in awemeModel.albumImages) {
-              if (imageModel.urlList.count > 0) {
-                  // 查找非.image后缀的URL
-                  NSURL *downloadURL = nil;
-                  for (NSString *urlString in imageModel.urlList) {
-                      NSURL *url = [NSURL URLWithString:urlString];
-                      NSString *pathExtension = [url.path.lowercaseString pathExtension];
-                      if (![pathExtension isEqualToString:@"image"]) {
-                          downloadURL = url;
-                          break;
-                      }
-                  }
+              // 优先 downloadURLList（40.3.0 正式下载链），再回退 urlList
+              NSURL *downloadURL = DYYYImageDownloadURL(imageModel);
+              if (!downloadURL) {
+                  [DYYYUtils diagLog:@"[DYYY保存] 批量图片跳过（无可用URL）itemID=%@ urlList=%@ downloadURLList=%@",
+                                      awemeModel.itemID, imageModel.urlList, imageModel.downloadURLList];
+                  continue;
+              }
+              [DYYYUtils diagLog:@"[DYYY保存] 批量图片 itemID=%@ url=%@ urlList=%@ downloadURLList=%@",
+                                  awemeModel.itemID, downloadURL.absoluteString, imageModel.urlList, imageModel.downloadURLList];
 
-                  if (!downloadURL && imageModel.urlList.count > 0) {
-                      downloadURL = [NSURL URLWithString:imageModel.urlList.firstObject];
-                  }
-
-                  // 检查是否是实况照片
-                  if (imageModel.clipVideo != nil) {
-                      NSURL *videoURL = [imageModel.clipVideo.playURL getDYYYSrcURLDownload];
+              // 检查是否是实况照片
+              if (imageModel.clipVideo != nil) {
+                  NSURL *videoURL = [imageModel.clipVideo.playURL getDYYYSrcURLDownload];
+                  if (downloadURL.absoluteString.length > 0 && videoURL.absoluteString.length > 0) {
                       [livePhotos addObject:@{@"imageURL" : downloadURL.absoluteString, @"videoURL" : videoURL.absoluteString}];
-                  } else {
-                      [imageURLs addObject:downloadURL.absoluteString];
                   }
+              } else {
+                  [imageURLs addObject:downloadURL.absoluteString];
               }
           }
 

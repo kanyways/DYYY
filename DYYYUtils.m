@@ -462,6 +462,33 @@ static BOOL DYYYUtilsWriteStaticImageToGIF(UIImage *image, NSURL *gifURL) {
     s_settingsCache = nil;
 }
 
+// 临时诊断：真机未越狱时 NSLog 不便查看，同步落一份到宿主 Documents。
+// 文件超 1MB 先清空，防止沙盒膨胀；验证完删除调用。
++ (void)diagLog:(NSString *)format, ... {
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSLog(@"[DYYY] %@", message);
+
+    NSString *documents = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    if (documents.length == 0) {
+        return;
+    }
+    NSString *path = [documents stringByAppendingPathComponent:@"DYYYDiagnosis.log"];
+    NSDictionary *attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
+    if (attributes && [attributes fileSize] > 1024 * 1024) {
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    }
+    NSData *data = [[message stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
+    FILE *fp = fopen(path.fileSystemRepresentation, "a");
+    if (fp) {
+        fwrite(data.bytes, 1, data.length, fp);
+        fclose(fp);
+    }
+}
+
 + (id)fastSettingValueForKey:(NSString *)key {
     if (!s_settingsCache) {
         s_settingsCache = [NSMutableDictionary dictionary];

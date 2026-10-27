@@ -386,12 +386,15 @@ static NSString *DYYYAlbumDescriptionForAwemeModel(AWEAwemeModel *awemeModel, NS
                     UIImage *image = [UIImage imageWithContentsOfFile:mediaURL.path];
                     if (image) {
                         [PHAssetChangeRequest creationRequestForAssetFromImage:image];
+                    } else {
+                        [DYYYUtils diagLog:@"[DYYY保存] 图片解码失败 path=%@ ext=%@", mediaURL.path, mediaURL.pathExtension];
                     }
                 }
               }
               completionHandler:^(BOOL success, NSError *_Nullable error) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                   if (!success) {
+                      [DYYYUtils diagLog:@"[DYYY保存] 相册写入失败 type=%d err=%@ path=%@", (int)mediaType, error, mediaURL.path];
                       [DYYYUtils showToast:@"保存失败"];
                   }
                   [[NSFileManager defaultManager] removeItemAtPath:mediaURL.path error:nil];
@@ -454,6 +457,7 @@ static NSString *DYYYAlbumDescriptionForAwemeModel(AWEAwemeModel *awemeModel, NS
 
           dispatch_async(dispatch_get_main_queue(), ^{
             if (!success) {
+                [DYYYUtils diagLog:@"[DYYY保存] 装饰图入库失败 type=%d err=%@ path=%@", (int)mediaType, error, assetURL.path];
                 [DYYYUtils showToast:@"保存失败"];
             }
             if (temporaryURL) {
@@ -1373,6 +1377,12 @@ static NSString *DYYYAlbumDescriptionForAwemeModel(AWEAwemeModel *awemeModel, NS
 
     [[NSFileManager defaultManager] moveItemAtURL:location toURL:destinationURL error:&moveError];
 
+    // 临时诊断：下载落盘结果，验证完删除
+    NSDictionary *fileAttrs = [[NSFileManager defaultManager] attributesOfItemAtPath:destinationURL.path error:nil];
+    [DYYYUtils diagLog:@"[DYYY下载] 落盘 id=%@ file=%@ size=%llu moveErr=%@ src=%@",
+                        downloadIDForTask, destinationURL.lastPathComponent,
+                        (unsigned long long)[fileAttrs fileSize], moveError, downloadTask.originalRequest.URL];
+
     if (isBatchDownload) {
         if (!moveError) {
             // 批量开始时已按 downloadID 登记说明文字，这里取回它对齐每张图的来源。
@@ -1440,6 +1450,10 @@ static NSString *DYYYAlbumDescriptionForAwemeModel(AWEAwemeModel *awemeModel, NS
     if (!downloadIDForTask) {
         return;
     }
+
+    // 临时诊断：下载失败原因（URL/错误码），验证完删除
+    [DYYYUtils diagLog:@"[DYYY下载] 失败 id=%@ code=%ld domain=%@ desc=%@ url=%@",
+                        downloadIDForTask, (long)error.code, error.domain, error.localizedDescription, task.originalRequest.URL];
 
     // 检查是否属于批量下载
     NSString *batchID = self.downloadToBatchMap[downloadIDForTask];
