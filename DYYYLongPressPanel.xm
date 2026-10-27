@@ -897,6 +897,7 @@ static NSInteger gDYYYModernPanelCustomGroupCount = 0;
 // 前 N 个 section 是 DYYY 自定义组，第 N 个 section 是原生菜单第一项（更多）。
 // 在这里给第一个原生 section 加 16pt 空表头（viewForHeaderInSection 返回的是
 // 普通 UIView，不会出现第二个拖拽把手），其余 section 完全走原生高度。
+// 间距觉得太近/太远，改下面 return 的 16.0 即可。
 %hook AWEModernLongPressPanelTableViewController
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
     if (gDYYYModernPanelHasCustomGroups && section == gDYYYModernPanelCustomGroupCount) {
