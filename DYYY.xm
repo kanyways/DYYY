@@ -6171,7 +6171,15 @@ static BOOL dyyyShouldUseLastStickerURL = NO;
     AWECommentLongPressPanelContext *context = [self commentPageContext];
     AWECommentModel *selected = [context selectdComment] ?: [[context params] selectdComment];
     AWEIMStickerModel *sticker = [selected sticker];
+    // 40.3.0 动态表情常常只有 animateURLModel（staticURLModel 为空），
+    // 旧逻辑只看 staticURLModel 会把这类表情判成“不可保存”。
     NSArray *originURLList = sticker.staticURLModel.originURLList;
+    if (originURLList.count == 0) {
+        originURLList = sticker.animateURLModel.originURLList;
+    }
+    if (originURLList.count == 0) {
+        originURLList = sticker.thumbnailURLModel.originURLList;
+    }
     if (originURLList.count > 0) {
         return YES;
     }
@@ -6189,8 +6197,16 @@ static BOOL dyyyShouldUseLastStickerURL = NO;
     
     // 判断保存类型(表情包/音频/图片)
     AWEIMStickerModel *sticker = [comment sticker];
+    // 动态表情的静态图字段可能为空，依次回退到动画链、缩略图链（40.3.0）
     NSArray *stickerURLList = sticker.staticURLModel.originURLList;
+    if (stickerURLList.count == 0) {
+        stickerURLList = sticker.animateURLModel.originURLList;
+    }
+    if (stickerURLList.count == 0) {
+        stickerURLList = sticker.thumbnailURLModel.originURLList;
+    }
     BOOL hasSticker = (stickerURLList.count > 0);
+    [DYYYUtils diagLog:@"[DYYY表情] static=%@ animate=%@ thumb=%@", sticker.staticURLModel.originURLList, sticker.animateURLModel.originURLList, sticker.thumbnailURLModel.originURLList];
 
     AWECommentAudioModel *audio = [comment audioModel];
     BOOL hasAudio = (audio && audio.content);

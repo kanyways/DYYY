@@ -671,7 +671,9 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 
 @interface AWEIMStickerModel : NSObject
-- (AWEURLModel *)staticURLModel;
+@property(nonatomic, strong) AWEURLModel *staticURLModel;
+@property(nonatomic, strong) AWEURLModel *animateURLModel;
+@property(nonatomic, strong) AWEURLModel *thumbnailURLModel;
 @end
 
 @interface _TtC33AWECommentLongPressPanelSwiftImpl37CommentLongPressPanelSaveImageElement : NSObject
