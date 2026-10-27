@@ -1292,13 +1292,23 @@ static NSString *DYYYJSONStringFromObject(id object) {
         [urlModels addObject:videoModel.playLowBitURL];
     }
 
+    NSURL *chosenURL = nil;
     for (AWEURLModel *urlModel in urlModels) {
         NSURL *url = [urlModel getDYYYSrcURLDownload];
         if (url) {
-            return url;
+            chosenURL = url;
+            break;
         }
     }
-    return nil;
+
+    // 临时诊断：保存视频失败时确认各 URL 链是否为空，验证完删除
+    [self diagLog:@"[DYYY视频] chosen=%@ h264=%@ download=%@ play=%@ low=%@",
+                  chosenURL.absoluteString,
+                  videoModel.h264URL.originURLList,
+                  [videoModel respondsToSelector:@selector(downloadURL)] ? [videoModel downloadURL].originURLList : nil,
+                  videoModel.playURL.originURLList,
+                  videoModel.playLowBitURL.originURLList];
+    return chosenURL;
 }
 
 // 通过"魔数（magic bytes）"识别文件真实格式：每种格式开头几个字节是固定的
