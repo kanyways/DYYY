@@ -1,7 +1,7 @@
 # DYYY AI Agent 提示文档（入口）
 
 > 完整原文：`AGENTS.full.md`（12 KB，按需 Read）。
-> 本项目是基于 Theos/Logos 的抖音 UI 调整 Tweak，README 标注仅在**抖音 36.5.0** 测试；
+> 本项目是基于 Theos/Logos 的抖音 UI 调整 Tweak，README 标注适配**抖音 39.9.0+**；
 > 回答需求以仓库现状为准，不要沿用旧版本描述。
 
 ## 工程关键点

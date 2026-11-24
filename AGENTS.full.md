@@ -1,6 +1,6 @@
 # DYYY AI Agent 提示文档
 
-本项目是基于 Theos/Logos 的抖音 UI 调整 Tweak。当前仓库 README 标注仅在 **抖音 36.5.0** 版本测试；回答需求时请以仓库现状为准，不要沿用旧版本描述。
+本项目是基于 Theos/Logos 的抖音 UI 调整 Tweak。当前仓库 README 标注适配 **抖音 39.9.0+**（39.9.0 / 40.3.0 / 41.2.0 已做类名与 selector 核对）；回答需求时请以仓库现状为准，不要沿用旧版本描述。
 
 ## 工程关键点
 - **Hook 入口**：`DYYY.xm` 负责 Feed、浮窗、全局透明度与 Tab Bar 高度等通用 Hook；`DYYYSettings.xm` 负责抖音设置页相关 Hook（`AWESettingBaseViewController`、`AWELeftSideBarWeatherLabel` 等）并构造 DYYY 自定义设置。
