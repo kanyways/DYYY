@@ -2975,6 +2975,36 @@ static void DYYYCommentLogRowElements(UIView *node, CGFloat centerY) {
 static char kDYYYCommentLabelLastTextKey;
 %hook AWECommentSwiftBizUI_CommentInteractionBaseLabel
 
+// 评论区毛玻璃：清掉用户名/时间/回复 label 的实色底，并关掉 opaque（opaque 层配透明底会渲染成黑块）。
+// 顺序必须是"先按原样设、再清掉"——直接把 setter 参数改成 clear 反而会被宿主后续逻辑渲染成黑底。
+- (void)layoutSubviews {
+    %orig;
+    if ([DYYYUtils fastBoolForKey:@"DYYYEnableCommentBlur"]) {
+        UIView *v = (UIView *)self;
+        UIColor *bg = v.backgroundColor;
+        if (bg && CGColorGetAlpha(bg.CGColor) > 0.01) {
+            v.backgroundColor = [UIColor clearColor];
+        }
+        if (v.opaque || v.layer.opaque) {
+            v.opaque = NO;
+            v.layer.opaque = NO;
+            [v setNeedsDisplay];
+        }
+    }
+}
+
+- (void)setBackgroundColor:(UIColor *)color {
+    %orig(color);
+    if ([DYYYUtils fastBoolForKey:@"DYYYEnableCommentBlur"] && color && CGColorGetAlpha(color.CGColor) > 0.01) {
+        %orig([UIColor clearColor]);
+        ((UIView *)self).opaque = NO;
+    }
+}
+
+- (void)setOpaque:(BOOL)opaque {
+    %orig([DYYYUtils fastBoolForKey:@"DYYYEnableCommentBlur"] ? NO : opaque);
+}
+
 - (void)setText:(NSString *)text {
     %orig(text); // 先让系统把文本赋上去
     
@@ -6085,12 +6115,20 @@ static BOOL isGestureActive = NO;
             speedString = [speedString substringToIndex:speedString.length - 1];
         }
 
-        if ([text containsString:@"2"]) {
-            // 原实现把所有 "2" 字符替换成速度文本："2.0" 会变成 "1.5.0"。
-            // 改为正则只匹配"独立的 2 或 2.xx 数字"（如宿主显示的 "2" / "2.0"），
-            // 替换为实际速度，避免破坏数字格式。
-            NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"2(\\.\\d+)?" options:0 error:nil];
-            text = [regex stringByReplacingMatchesInString:text options:0 range:NSMakeRange(0, text.length) withTemplate:speedString];
+        // 原实现把所有 "2" 字符替换成速度文本："2.0" 会变成 "1.5.0"。
+        // 改为正则只匹配"独立的 2 或 2.xx 数字"（如宿主显示的 "2" / "2.0"），
+        // 替换为实际速度，避免破坏数字格式。
+        NSRange textRange = NSMakeRange(0, text.length);
+        NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"2(\\.\\d+)?" options:0 error:nil];
+        if ([regex numberOfMatchesInString:text options:0 range:textRange] > 0) {
+            text = [regex stringByReplacingMatchesInString:text options:0 range:textRange withTemplate:speedString];
+        } else {
+            // 41.x 官方文案可能不含 "2"（如 "1.0x"），退化为只替换第一个数字。
+            NSRegularExpression *firstNumberRegex = [NSRegularExpression regularExpressionWithPattern:@"[0-9]+(\\.[0-9]+)?" options:0 error:nil];
+            NSTextCheckingResult *firstMatch = [firstNumberRegex firstMatchInString:text options:0 range:textRange];
+            if (firstMatch) {
+                text = [text stringByReplacingCharactersInRange:firstMatch.range withString:speedString];
+            }
         }
     }
 
@@ -6278,9 +6316,14 @@ static BOOL dyyyShouldUseLastStickerURL = NO;
             // 使用 DYYYUtils 封装的方法查找目标控制器
             UIViewController *topVC = [DYYYUtils topView];
             
-            // 获取 Ivar 定义的类和目标控制器类
-            Class ivarClass = NSClassFromString(@"AWECommentMediaFeedSwfitImpl.CommentMediaFeedCellViewController");
-            Class targetClass = NSClassFromString(@"AWECommentMediaFeedSwfitImpl.CommentMediaFeedCommonImageCellViewController");
+            // 获取 Ivar 定义的类和目标控制器类。
+            // 点分名只在部分版本的字符串表里出现，用 marker 扫描兜底（39.9.0 / 40.3.0 / 41.2.0 都有这两个 Swift 类）。
+            Class ivarClass = [DYYYUtils resolveClassByExactNames:@[ @"AWECommentMediaFeedSwfitImpl.CommentMediaFeedCellViewController" ]
+                                                 containingMarker:@"CommentMediaFeedCellViewController"
+                                                        underRoot:nil];
+            Class targetClass = [DYYYUtils resolveClassByExactNames:@[ @"AWECommentMediaFeedSwfitImpl.CommentMediaFeedCommonImageCellViewController" ]
+                                                      containingMarker:@"CommentMediaFeedCommonImageCellViewController"
+                                                             underRoot:nil];
             
             if (ivarClass && targetClass && topVC) {
                 Ivar multiIndexIvar = class_getInstanceVariable(ivarClass, "currentIndexInMultiImageList");
@@ -11996,6 +12039,7 @@ static Class tabBarButtonClass = nil;
 
     NSMutableArray *visibleButtons = [NSMutableArray array];
     UIView *ipadContainerView = nil;
+    BOOL anyButtonHidden = NO;
 
     for (UIView *subview in self.subviews) {
         if ([subview isKindOfClass:generalButtonClass] || [subview isKindOfClass:plusContainerButtonClass] || [subview isKindOfClass:plusButtonClass] ||
@@ -12009,7 +12053,9 @@ static Class tabBarButtonClass = nil;
             subview.userInteractionEnabled = !shouldHide;
             subview.hidden = shouldHide;
 
-            if (!shouldHide) {
+            if (shouldHide) {
+                anyButtonHidden = YES;
+            } else {
                 [visibleButtons addObject:subview];
             }
         } else if ([subview isKindOfClass:tabBarButtonClass]) {
@@ -12020,24 +12066,28 @@ static Class tabBarButtonClass = nil;
         }
     }
 
-    [visibleButtons sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
-      return [@(a.frame.origin.x) compare:@(b.frame.origin.x)];
-    }];
+    // 仅当确实隐藏了某个底栏按钮时才重新均匀布局，否则保留抖音原生布局。
+    // 41.x 新版"朋友/商城"可切换 tab 与"+"按钮原生并非等宽，无条件重排会把按钮挤向中间导致错位。
+    if (anyButtonHidden) {
+        [visibleButtons sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
+          return [@(a.frame.origin.x) compare:@(b.frame.origin.x)];
+        }];
 
-    CGFloat offsetX, totalWidth;
-    if (ipadContainerView) {
-        offsetX = ipadContainerView.frame.origin.x;
-        totalWidth = ipadContainerView.bounds.size.width;
-    } else {
-        offsetX = 0;
-        totalWidth = self.bounds.size.width;
-    }
-    CGFloat buttonWidth = (visibleButtons.count > 0) ? (totalWidth / visibleButtons.count) : 0;
+        CGFloat offsetX, totalWidth;
+        if (ipadContainerView) {
+            offsetX = ipadContainerView.frame.origin.x;
+            totalWidth = ipadContainerView.bounds.size.width;
+        } else {
+            offsetX = 0;
+            totalWidth = self.bounds.size.width;
+        }
+        CGFloat buttonWidth = (visibleButtons.count > 0) ? (totalWidth / visibleButtons.count) : 0;
 
-    // 均匀布局按钮
-    for (NSInteger i = 0; i < visibleButtons.count; i++) {
-        UIView *button = visibleButtons[i];
-        button.frame = CGRectMake(offsetX + i * buttonWidth, button.frame.origin.y, buttonWidth, button.frame.size.height);
+        // 均匀布局按钮
+        for (NSInteger i = 0; i < visibleButtons.count; i++) {
+            UIView *button = visibleButtons[i];
+            button.frame = CGRectMake(offsetX + i * buttonWidth, button.frame.origin.y, buttonWidth, button.frame.size.height);
+        }
     }
 
     // 禁用首页刷新功能
@@ -12820,6 +12870,17 @@ static BOOL DYYYCommentPauseOwnsPlayback(void) {
             }
         }
     }
+
+    // 清掉直接盖在模糊层上的那层不透明容器（最外层 UICollectionView 等），只清直接子 view，不碰深层
+    for (UIView *sub in self.view.subviews) {
+        if ([sub isKindOfClass:[UIVisualEffectView class]] || sub.tag == 999) {
+            continue;
+        }
+        UIColor *bg = sub.backgroundColor;
+        if (bg && CGColorGetAlpha(bg.CGColor) >= 0.99) {
+            sub.backgroundColor = [UIColor clearColor];
+        }
+    }
 }
 
 %end
@@ -12832,6 +12893,19 @@ static BOOL DYYYCommentPauseOwnsPlayback(void) {
 
     if (!DYYYGetBool(@"DYYYEnableCommentBlur")) {
         return;
+    }
+
+    ((UIView *)self).backgroundColor = [UIColor clearColor];
+
+    // 清掉同级的不透明填充（如底部 {0,572,440,200} 黑块）
+    UIView *magicSuper = ((UIView *)self).superview;
+    for (UIView *sib in magicSuper.subviews) {
+        if ([sib isMemberOfClass:[UIView class]]) {
+            UIColor *sbg = sib.backgroundColor;
+            if (sbg && CGColorGetAlpha(sbg.CGColor) >= 0.99) {
+                sib.backgroundColor = [UIColor clearColor];
+            }
+        }
     }
 
     UICollectionView *collectionView = (UICollectionView *)self;
@@ -12852,6 +12926,34 @@ static BOOL DYYYCommentPauseOwnsPlayback(void) {
     collectionView.scrollIndicatorInsets = inset;
 }
 
+%end
+
+// 分区背景
+%hook AWEBaseListSectionBackgroundView
+- (void)layoutSubviews {
+    %orig;
+    if ([DYYYUtils fastBoolForKey:@"DYYYEnableCommentBlur"]) {
+        ((UIView *)self).backgroundColor = [UIColor clearColor];
+    }
+}
+%end
+
+// 评论区 Tab 内容容器：自身与直接子视图的不透明底
+%hook AWEListKitTabContentCollectionView
+- (void)layoutSubviews {
+    %orig;
+    if (![DYYYUtils fastBoolForKey:@"DYYYEnableCommentBlur"]) {
+        return;
+    }
+    UIView *selfView = (UIView *)self;
+    selfView.backgroundColor = [UIColor clearColor];
+    for (UIView *sub in selfView.subviews) {
+        UIColor *bg = sub.backgroundColor;
+        if ([sub isMemberOfClass:[UIView class]] && bg && CGColorGetAlpha(bg.CGColor) >= 0.99) {
+            sub.backgroundColor = [UIColor clearColor];
+        }
+    }
+}
 %end
 
 %hook UIView
@@ -13185,6 +13287,11 @@ static BOOL DYYYCommentPauseOwnsPlayback(void) {
         if (currentVersion.length > 0 && [DYYYUtils compareVersion:currentVersion toVersion:@"39.2.0"] != NSOrderedDescending) {
             useFullHeight = YES;
         }
+    }
+
+    // 父容器本身已经比屏幕矮一个底栏（底栏在容器外面）时，不能再减一次，否则文案悬空（873-83=790）
+    if (!useFullHeight && gCurrentTabBarHeight > 0 && [UIScreen mainScreen].bounds.size.height - superviewHeight >= gCurrentTabBarHeight - 1.0) {
+        useFullHeight = YES;
     }
 
     if (useFullHeight) {
@@ -14139,7 +14246,9 @@ static Class TagViewClass = nil;
 %hook AWEStoryProgressContainerView
 - (void)setCenter:(CGPoint)center {
     UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
-    if ([vc isKindOfClass:NSClassFromString(@"AWEFeedPlayControlImpl.PureModePageCellViewController")] && DYYYGetBool(@"DYYYEnableFullScreen")) {
+    // 41.x 点分名不再出现在类索引里，补一个去前缀的裸类名兜底（39.9.0+ 三个版本都有裸名）。
+    Class pureModeCellClass = NSClassFromString(@"AWEFeedPlayControlImpl.PureModePageCellViewController") ?: NSClassFromString(@"PureModePageCellViewController");
+    if (pureModeCellClass && [vc isKindOfClass:pureModeCellClass] && DYYYGetBool(@"DYYYEnableFullScreen")) {
         center.y -= gCurrentTabBarHeight;
     }
     %orig(center);
@@ -14219,18 +14328,46 @@ static Class TagViewClass = nil;
 
 %end
 
+// 前向声明：实现见文件末尾"抖音 41.x 前向兼容"段
+static BOOL DYYYIsDouyin41OrLater(void);
+
 %hook AWEAwemeDetailTableView
 
 - (void)setFrame:(CGRect)frame {
     if (DYYYGetBool(@"DYYYEnableFullScreen")) {
-        CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+        BOOL handled = NO;
+        // 41.x 个人主页作品详情：表被约束成"少一个底栏高度"（如 956→873）。
+        // 在 setFrame: 里直接拉满到父视图高度，避免先显示矮一帧再纠正导致切视频抖动。
+        if (DYYYIsDouyin41OrLater()) {
+            UIView *sv = self.superview;
+            if (sv && sv.frame.size.height > frame.size.height + 0.5) {
+                frame.size.height = sv.frame.size.height;
+                handled = YES;
+            }
+        }
+        if (!handled) {
+            CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
 
-        CGFloat remainder = fmod(frame.size.height, screenHeight);
-        if (remainder != 0) {
-            frame.size.height += (screenHeight - remainder);
+            CGFloat remainder = fmod(frame.size.height, screenHeight);
+            if (remainder != 0) {
+                frame.size.height += (screenHeight - remainder);
+            }
         }
     }
     %orig(frame);
+}
+
+// 41.x 兜底：若布局后仍矮于父视图，再拉满一次。
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYIsDouyin41OrLater() && DYYYGetBool(@"DYYYEnableFullScreen")) {
+        UIView *sv = self.superview;
+        if (sv && sv.frame.size.height > 0 && self.frame.size.height < sv.frame.size.height - 0.5) {
+            CGRect frame = self.frame;
+            frame.size.height = sv.frame.size.height;
+            self.frame = frame;
+        }
+    }
 }
 
 %end
@@ -15152,7 +15289,9 @@ static void DYYYHideDouYinSelectAppGuideViews(id owner) {
       DYYYStartHighFPSHooks();
     });
 
-    Class interactionBaseLabelClass = objc_getClass("AWECommentSwiftBizUI.CommentInteractionBaseLabel");
+    Class interactionBaseLabelClass = [DYYYUtils resolveClassByExactNames:@[ @"AWECommentSwiftBizUI.CommentInteractionBaseLabel" ]
+                                                         containingMarker:@"CommentInteractionBaseLabel"
+                                                                underRoot:nil];
     if (interactionBaseLabelClass) {
         %init(DYYYCommentExactTimeGroup, AWECommentSwiftBizUI_CommentInteractionBaseLabel = interactionBaseLabelClass);
     }
@@ -15226,7 +15365,9 @@ static void DYYYHideDouYinSelectAppGuideViews(id owner) {
             %init(CommentHeaderTemplateGroup, AWECommentPanelHeaderSwiftImpl_CommentHeaderTemplateAnchorView = commentHeaderTemplateClass);
         }
 
-        Class tipsVCClass = objc_getClass("AWECommentPanelListSwiftImpl.CommentBottomTipsContainerViewController");
+        Class tipsVCClass = [DYYYUtils resolveClassByExactNames:@[ @"AWECommentPanelListSwiftImpl.CommentBottomTipsContainerViewController" ]
+                                               containingMarker:@"CommentBottomTipsContainerViewController"
+                                                      underRoot:nil];
         if (tipsVCClass) {
             %init(CommentBottomTipsVCGroup, AWECommentPanelListSwiftImpl_CommentBottomTipsContainerViewController = tipsVCClass);
         }
@@ -15252,4 +15393,448 @@ static void DYYYHideDouYinSelectAppGuideViews(id owner) {
                                                       }
                                                     }];
     }
+}
+
+#pragma mark - 抖音 41.x 前向兼容（运行时命中才安装，40.x 行为不变）
+
+// 来源：上游 huami1314/DYYY 3.0.2（适配抖音 41.2.0）。
+// 本地基线是 40.3.0 且已有自己的实现，因此这里只做"加法"：
+//   - 类名迁移：新旧类名按版本并存，分别挂钩，逻辑一致；
+//   - DPlayer 倍速 / 头像元素 / 评论头等：39.9.0 起对应类就存在，按类存在安装；
+//   - 详情页行高：只有 41.x 才有 AWEDetailFeedScrollDelegateContainer，按它整体门控；
+//   - 每个组都在 %ctor 里按 objc_getClass / marker 扫描结果初始化，类不存在就彻底不生效。
+
+// 当前抖音主版本是否 >= 41.0.0。版本号读不到时按旧版处理，保持 40.x 现状。
+static BOOL DYYYIsDouyin41OrLater(void) {
+    static BOOL is41 = NO;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+        if (version.length > 0) {
+            is41 = [DYYYUtils compareVersion:version toVersion:@"41.0.0"] != NSOrderedAscending;
+        }
+    });
+    return is41;
+}
+
+// 详情页行高基准：行高若按"屏高 - 底栏"量过（如 873），全屏拉到屏高后会出现 873/956 混排，
+// 这里把这种"差一个底栏"的行高统一提到屏高。差值超过 160 视为异常，不动。
+static CGFloat DYYYDetailFullCellHeight(CGFloat orig) {
+    if (![DYYYUtils fastBoolForKey:@"DYYYEnableFullScreen"]) {
+        return orig;
+    }
+    CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
+    CGFloat diff = screenHeight - orig;
+    return (orig > 1.0 && diff > 1.0 && diff < 160.0) ? screenHeight : orig;
+}
+
+#pragma mark 41.x DPlayer 流长按倍速
+
+static BOOL dyyy41DPSpeedGestureActive = NO;
+static CGFloat dyyy41DPSpeedCurrent = 0;
+
+static CGFloat DYYY41LongPressSpeedValue(void) {
+    if (dyyy41DPSpeedGestureActive && dyyy41DPSpeedCurrent > 0) {
+        return dyyy41DPSpeedCurrent;
+    }
+    float speed = [DYYYUtils fastFloatForKey:@"DYYYLongPressSpeed"];
+    return (speed == 0) ? 2.0 : speed;
+}
+
+%group DYYY41SpeedGroup
+%hook DYYY41SpeedCore
+- (double)longPressFastSpeedValue {
+    // 41.x 长按期间抖音会持续读取本方法驱动倍速；上下滑时必须返回实时档位，否则会被压回设定值。
+    return (double)DYYY41LongPressSpeedValue();
+}
+
+- (void)handleFastSpeed:(id)gesture {
+    %orig;
+    if (!DYYYGetBool(@"DYYYEnableLongPressSpeedGesture")) {
+        return;
+    }
+    if (![gesture isKindOfClass:[UIGestureRecognizer class]]) {
+        return;
+    }
+    UIGestureRecognizer *recognizer = (UIGestureRecognizer *)gesture;
+    CGPoint location = [recognizer locationInView:recognizer.view];
+    static CGFloat dyyy41InitialY = 0;
+    if (recognizer.state == UIGestureRecognizerStateBegan) {
+        dyyy41InitialY = location.y;
+        dyyy41DPSpeedGestureActive = YES;
+        float speed = [DYYYUtils fastFloatForKey:@"DYYYLongPressSpeed"];
+        dyyy41DPSpeedCurrent = (speed == 0) ? 2.0 : speed;
+    } else if (recognizer.state == UIGestureRecognizerStateChanged && dyyy41DPSpeedGestureActive) {
+        CGFloat deltaY = location.y - dyyy41InitialY;
+        if (fabs(deltaY) > 10.0) {
+            CGFloat newSpeed = dyyy41DPSpeedCurrent + ((deltaY > 0) ? 0.25 : -0.25);
+            newSpeed = MAX(0.5, MIN(3.0, newSpeed));
+            if (newSpeed != dyyy41DPSpeedCurrent) {
+                dyyy41DPSpeedCurrent = newSpeed;
+                dyyy41InitialY = location.y;
+                ((void (*)(id, SEL, double))objc_msgSend)(self, @selector(changeSpeed:), (double)newSpeed);
+            }
+        }
+    } else if (recognizer.state == UIGestureRecognizerStateEnded || recognizer.state == UIGestureRecognizerStateCancelled) {
+        dyyy41DPSpeedGestureActive = NO;
+        dyyy41DPSpeedCurrent = 0;
+        dyyy41InitialY = 0;
+    }
+}
+%end
+
+%hook DYYY41SpeedFeed
+- (double)longPressFastSpeedValue {
+    return (double)DYYY41LongPressSpeedValue();
+}
+%end
+
+%hook DYYY41SpeedPinch
+- (double)longPressFastSpeedValue {
+    return (double)DYYY41LongPressSpeedValue();
+}
+%end
+
+%hook DYYY41PureModeSpeed
+- (double)longPressFastSpeedValue {
+    return (double)DYYY41LongPressSpeedValue();
+}
+%end
+%end
+
+#pragma mark 41.x 详情页全屏行高
+
+// 41.x 详情页的行高/翻页基准来自 fixedCellHeight / originalTableViewHeight / normalHeight，
+// 全屏把表拉到屏高后这些值仍是"屏高 - 底栏"，会造成混排少一截。这里统一提到屏高。
+%group DYYY41DetailHeightGroup
+%hook DYYY41DetailScrollDelegate
+- (CGFloat)fixedCellHeight {
+    return DYYYDetailFullCellHeight(%orig);
+}
+%end
+
+%hook DYYY41ProfileAdDataLayer
+- (CGFloat)originalTableViewHeight {
+    return DYYYDetailFullCellHeight(%orig);
+}
+- (void)setOriginalTableViewHeight:(CGFloat)height {
+    %orig(DYYYDetailFullCellHeight(height));
+}
+%end
+
+%hook DYYY41ProfileAdVideoDataController
+- (CGFloat)originalTableViewHeight {
+    return DYYYDetailFullCellHeight(%orig);
+}
+- (void)updateOriginalTableViewHeight:(CGFloat)height {
+    %orig(DYYYDetailFullCellHeight(height));
+}
+%end
+
+%hook DYYY41LiveCardLayoutController
+- (CGFloat)originalTableViewHeight {
+    return DYYYDetailFullCellHeight(%orig);
+}
+- (void)setOriginalTableViewHeight:(CGFloat)height {
+    %orig(DYYYDetailFullCellHeight(height));
+}
+%end
+
+%hook DYYY41LiveCardLayoutDataLayer
+- (CGFloat)normalHeight {
+    return DYYYDetailFullCellHeight(%orig);
+}
+- (CGFloat)originalTableViewHeight {
+    return DYYYDetailFullCellHeight(%orig);
+}
+- (void)setOriginalTableViewHeight:(CGFloat)height {
+    %orig(DYYYDetailFullCellHeight(height));
+}
+%end
+
+%hook DYYY41DetailTableVC
+- (CGFloat)fixedCellHeight {
+    return DYYYDetailFullCellHeight(%orig);
+}
+%end
+%end
+
+#pragma mark 41.x 首页头像元素隐藏
+
+static char kDYYY41PlusAlphaTouchedKey;
+
+%group DYYY41AvatarGroup
+%hook AWEPlayInteractionUserAvatarElement
+- (void)layoutElementView {
+    %orig;
+    // 39.9.0 / 40.3.0 的元素类不一定实现 setHide:，先探测再调用，避免 unrecognized selector。
+    if ([DYYYUtils fastBoolForKey:@"DYYYHideAvatarButton"] && [self respondsToSelector:@selector(setHide:)]) {
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(self, @selector(setHide:), YES);
+    }
+}
+%end
+
+%hook AWEPlayInteractionUserAvatarOptElementElement
+- (void)layoutElementView {
+    %orig;
+    // 本地已有同名 hook（DYYY.xm 11159，隐藏头像/环/装饰），这里只补官方 setHide:，避免重复处理。
+    if ([DYYYUtils fastBoolForKey:@"DYYYHideAvatarButton"] && [self respondsToSelector:@selector(setHide:)]) {
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(self, @selector(setHide:), YES);
+    }
+}
+%end
+
+%hook AWEPlayInteractionUserProfileContainerView
+- (void)layoutSubviews {
+    %orig;
+    BOOL hide = [DYYYUtils fastBoolForKey:@"DYYYHideAvatarButton"];
+    if (((UIView *)self).hidden != hide) {
+        ((UIView *)self).hidden = hide;
+    }
+}
+- (void)setHidden:(BOOL)hidden {
+    if ([DYYYUtils fastBoolForKey:@"DYYYHideAvatarButton"]) {
+        hidden = YES;
+    }
+    %orig(hidden);
+}
+%end
+
+// 41.x 加号是普通 UIImageView（不再是 LOTAnimationView），旧的动画视图 hook 匹配不到。
+// 两个开关语义不同：移除头像加号整块隐藏且不可点；隐藏头像加号只把内容变透明，原位置仍可点。
+%hook AWEPlayInteractionFollowPromptView
+- (void)layoutSubviews {
+    %orig;
+    if ([DYYYUtils fastBoolForKey:@"DYYYHideAvatarButton"] || [DYYYUtils fastBoolForKey:@"DYYYHideFollowPromptView"]) {
+        self.userInteractionEnabled = NO;
+        self.hidden = YES;
+        return;
+    }
+
+    BOOL hidePlus = [DYYYUtils fastBoolForKey:@"DYYYHideLOTAnimationView"];
+    NSString *transparencyValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYAvatarViewTransparency"];
+    CGFloat targetAlpha = -1;
+    if (hidePlus) {
+        targetAlpha = 0.0;
+    } else if (transparencyValue.length > 0) {
+        CGFloat value = [transparencyValue floatValue];
+        if (value >= 0.0 && value <= 1.0) {
+            targetAlpha = value;
+        }
+    }
+
+    if (targetAlpha >= 0) {
+        for (UIView *sub in self.subviews) {
+            if (fabs(sub.alpha - targetAlpha) > 0.01) {
+                sub.alpha = targetAlpha;
+            }
+        }
+        objc_setAssociatedObject(self, &kDYYY41PlusAlphaTouchedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } else if (objc_getAssociatedObject(self, &kDYYY41PlusAlphaTouchedKey)) {
+        for (UIView *sub in self.subviews) {
+            sub.alpha = 1.0;
+        }
+        objc_setAssociatedObject(self, &kDYYY41PlusAlphaTouchedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+
+- (void)setHidden:(BOOL)hidden {
+    if ([DYYYUtils fastBoolForKey:@"DYYYHideAvatarButton"] || [DYYYUtils fastBoolForKey:@"DYYYHideFollowPromptView"]) {
+        hidden = YES;
+    }
+    %orig(hidden);
+}
+%end
+%end
+
+#pragma mark 41.x 类名迁移（新旧类名并存，分别挂钩）
+
+// 保存他人头像：40.3.0 起 AWE 前缀类与旧的 AFD 前缀类并存
+%group DYYYProfileAvatarSaveGroup
+%hook AWEProfileAvatarFunctionManager
+- (BOOL)shouldShowSaveAvatarItem {
+    if (DYYYGetBool(@"DYYYEnableSaveAvatar")) {
+        return YES;
+    }
+    return %orig;
+}
+%end
+%end
+
+// 图文状态栏（41.x 去掉了 New）
+%group DYYYFullPageFeedStatusBarGroup
+%hook AWEFullPageFeedContainerViewController
+- (BOOL)prefersStatusBarHidden {
+    if (DYYYGetBool(@"DYYYHideStatusbar")) {
+        return YES;
+    }
+    if (DYYYGetBool(@"DYYYHideStatusBarOnClear") && hideButton && hideButton.isElementsHidden) {
+        return YES;
+    }
+    Class feedClass = objc_getClass("AWEFullPageFeedContainerViewController");
+    if (feedClass && class_getInstanceMethod([self class], @selector(prefersStatusBarHidden)) != class_getInstanceMethod(feedClass, @selector(prefersStatusBarHidden))) {
+        return %orig;
+    }
+    return NO;
+}
+%end
+%end
+
+// 主页发布引导
+%group DYYYProfilePublishGuideCellGroup
+%hook AWEProfilePublishGuideCollectionViewCell
+- (void)didMoveToSuperview {
+    %orig;
+    if ([DYYYUtils fastBoolForKey:@"DYYYHidePostView"] && [(UIView *)self superview]) {
+        [(UIView *)self setHidden:YES];
+    }
+}
+%end
+%end
+
+// 主页任务卡
+%group DYYYProfileUGCTaskCardGroup
+%hook AWEUserProfileUGCTaskCardStyleListCollectionViewCell
+- (BOOL)shouldShowPublishGuide {
+    if ([DYYYUtils fastBoolForKey:@"DYYYHidePostView"]) {
+        return NO;
+    }
+    return %orig;
+}
+%end
+%end
+
+// 红包激励挂件容器（41.x 由 29IncentivePendantContainerView 改为 20PendantContainerView；40.3.0 两个都在）
+%group DYYY41PendantGroup
+%hook _TtC21AWEIncentiveSwiftImpl20PendantContainerView
+- (void)layoutSubviews {
+    %orig;
+    if ([DYYYUtils fastBoolForKey:@"DYYYHidePendantGroup"]) {
+        [self removeFromSuperview];
+    }
+}
+%end
+%end
+
+#pragma mark 41.x 评论头部容器（41.x 迁到 AWECommentCommerceSwiftImpl）
+%group DYYY41CommentHeaderGeneralGroup
+%hook DYYY41CommentHeaderGeneral
+- (void)layoutSubviews {
+    %orig;
+    if ([DYYYUtils fastBoolForKey:@"DYYYHideCommentViews"]) {
+        [self setHidden:YES];
+    }
+}
+%end
+%end
+
+%group DYYY41CommentHeaderGoodsGroup
+%hook DYYY41CommentHeaderGoods
+- (void)layoutSubviews {
+    %orig;
+    if ([DYYYUtils fastBoolForKey:@"DYYYHideCommentViews"]) {
+        [self setHidden:YES];
+    }
+}
+%end
+%end
+
+#pragma mark 评论区毛玻璃：清掉盖住模糊层的不透明底
+
+// "展开X条回复" footer 的 UIButtonLabel 有 (0.09) 黑底，清掉
+%group DYYYCommentBlurFooterGroup
+%hook DYYY41CommentBaseFooterView
+- (void)layoutSubviews {
+    %orig;
+    if (![DYYYUtils fastBoolForKey:@"DYYYEnableCommentBlur"]) {
+        return;
+    }
+    for (UIView *sub in ((UIView *)self).subviews) {
+        if ([sub isKindOfClass:[UIButton class]]) {
+            UILabel *titleLabel = ((UIButton *)sub).titleLabel;
+            titleLabel.backgroundColor = [UIColor clearColor];
+            titleLabel.layer.backgroundColor = [UIColor clearColor].CGColor;
+        }
+        CGColorRef layerBackground = sub.layer.backgroundColor;
+        if ((sub.backgroundColor && CGColorGetAlpha(sub.backgroundColor.CGColor) >= 0.99) || (layerBackground && CGColorGetAlpha(layerBackground) >= 0.99)) {
+            sub.backgroundColor = [UIColor clearColor];
+            sub.layer.backgroundColor = [UIColor clearColor].CGColor;
+        }
+    }
+}
+%end
+%end
+
+%ctor {
+    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYUserAgreementAccepted"]) {
+        return;
+    }
+
+    // ---- 类名迁移：类存在就挂。39.9.0+ 各版本的新旧类名并存情况不同，重复挂钩逻辑一致 ----
+    if (objc_getClass("AWEProfileAvatarFunctionManager")) {
+        %init(DYYYProfileAvatarSaveGroup);
+    }
+    if (objc_getClass("AWEFullPageFeedContainerViewController")) {
+        %init(DYYYFullPageFeedStatusBarGroup);
+    }
+    if (objc_getClass("AWEProfilePublishGuideCollectionViewCell")) {
+        %init(DYYYProfilePublishGuideCellGroup);
+    }
+    if (objc_getClass("AWEUserProfileUGCTaskCardStyleListCollectionViewCell")) {
+        %init(DYYYProfileUGCTaskCardGroup);
+    }
+    if (objc_getClass("_TtC21AWEIncentiveSwiftImpl20PendantContainerView")) {
+        %init(DYYY41PendantGroup);
+    }
+
+    // ---- 评论毛玻璃：底部回复按钮（Swift 类，点分名 + marker 扫描兜底）----
+    Class footerClass = [DYYYUtils resolveClassByExactNames:@[ @"AWECommentPanelListSwiftImpl.CommentBaseFooterView" ]
+                                                containingMarker:@"CommentBaseFooterView"
+                                                       underRoot:nil];
+    if (footerClass) {
+        %init(DYYYCommentBlurFooterGroup, DYYY41CommentBaseFooterView = footerClass);
+    }
+
+    // ---- DPlayer 流倍速：39.9.0 起 AWEDSpeed* 就存在，按类存在安装 ----
+    Class speedCore = objc_getClass("AWEDSpeedCoreContainer");
+    Class speedFeed = objc_getClass("AWEDSpeedFeedContainer");
+    Class speedPinch = objc_getClass("AWEDSpeedPinchContainer");
+    Class pureModeSpeed = objc_getClass("AFDPureModePageLongPressFastSpeedController");
+    if (speedCore || speedFeed || speedPinch || pureModeSpeed) {
+        %init(DYYY41SpeedGroup, DYYY41SpeedCore = speedCore, DYYY41SpeedFeed = speedFeed, DYYY41SpeedPinch = speedPinch, DYYY41PureModeSpeed = pureModeSpeed);
+    }
+
+    // ---- 详情页全屏行高：只有 41.x 才有 AWEDetailFeedScrollDelegateContainer，按它整体门控 ----
+    Class detailScrollDelegate = objc_getClass("AWEDetailFeedScrollDelegateContainer");
+    if (detailScrollDelegate) {
+        %init(DYYY41DetailHeightGroup, DYYY41DetailScrollDelegate = detailScrollDelegate, DYYY41ProfileAdDataLayer = objc_getClass("AWEUserProfileAdDataLayer"),
+              DYYY41ProfileAdVideoDataController = objc_getClass("AWEUserProFileAdVideoDataController"), DYYY41LiveCardLayoutController = objc_getClass("AWELivePostWorkLiveCardLayoutController"),
+              DYYY41LiveCardLayoutDataLayer = objc_getClass("AWELivePostWorkLiveCardLayoutDataLayer"), DYYY41DetailTableVC = objc_getClass("AWEAwemeDetailTableViewController"));
+    }
+
+    // ---- 首页头像元素：39.9.0 起 AWEPlayInteractionUserProfileContainerView 就存在 ----
+    if (objc_getClass("AWEPlayInteractionUserProfileContainerView")) {
+        %init(DYYY41AvatarGroup);
+    }
+
+    Class commerceGeneralClass = [DYYYUtils resolveClassByExactNames:@[ @"AWECommentCommerceSwiftImpl.CommentHeaderGeneralView" ]
+                                                      containingMarker:@"CommentHeaderGeneralView"
+                                                             underRoot:nil];
+    if (commerceGeneralClass) {
+        %init(DYYY41CommentHeaderGeneralGroup, DYYY41CommentHeaderGeneral = commerceGeneralClass);
+    }
+
+    Class commerceGoodsClass = [DYYYUtils resolveClassByExactNames:@[ @"AWECommentCommerceSwiftImpl.CommentHeaderGoodsView" ]
+                                                    containingMarker:@"CommentHeaderGoodsView"
+                                                           underRoot:nil];
+    if (commerceGoodsClass) {
+        %init(DYYY41CommentHeaderGoodsGroup, DYYY41CommentHeaderGoods = commerceGoodsClass);
+    }
+
+    // 启动自检：真机日志里一行确认哪些兼容组真正装上了，便于以后无设备时先看源码、有设备时一眼定位。
+    NSLog(@"[DYYY][Compat] avatarSave=%d fullPageFeed=%d guide=%d ugcCard=%d pendant=%d footer=%d speed=%d detailHeight=%d avatar=%d commerce=%d",
+          objc_getClass("AWEProfileAvatarFunctionManager") != nil, objc_getClass("AWEFullPageFeedContainerViewController") != nil,
+          objc_getClass("AWEProfilePublishGuideCollectionViewCell") != nil, objc_getClass("AWEUserProfileUGCTaskCardStyleListCollectionViewCell") != nil,
+          objc_getClass("_TtC21AWEIncentiveSwiftImpl20PendantContainerView") != nil, footerClass != nil, speedCore != nil || speedFeed != nil || speedPinch != nil || pureModeSpeed != nil,
+          detailScrollDelegate != nil, objc_getClass("AWEPlayInteractionUserProfileContainerView") != nil, commerceGeneralClass != nil || commerceGoodsClass != nil);
 }

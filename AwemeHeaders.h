@@ -2007,3 +2007,130 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 // 直播关注转发引导广告位
 @interface IESLiveFlowGuidanceAdView : UIView
 @end
+
+#pragma mark - 抖音 41.x 兼容类（上游 DYYY 3.0.x 适配 41.2.0 时新增的类名）
+
+// 保存他人头像开关：40.3.0 起 AWE 前缀类与旧的 AFD 前缀类并存
+@interface AWEProfileAvatarFunctionManager : NSObject
+- (BOOL)shouldShowSaveAvatarItem;
+@end
+
+// 图文/全屏容器：41.x 由 AWEFullPageFeedNewContainerViewController 改为不带 New 的类名
+@interface AWEFullPageFeedContainerViewController : UIViewController
+- (BOOL)prefersStatusBarHidden;
+@end
+
+// 主页发布引导：41.x 改名（旧名 AWEProfilePostEmptyPublishGuideCollectionViewCell）
+@interface AWEProfilePublishGuideCollectionViewCell : UICollectionViewCell
+- (void)didMoveToSuperview;
+@end
+
+// 主页任务卡：41.x 改名（旧名 AWEProfileTaskCardStyleListCollectionViewCell）
+@interface AWEUserProfileUGCTaskCardStyleListCollectionViewCell : UIView
+- (BOOL)shouldShowPublishGuide;
+@end
+
+// 41.x 首页右侧头像整块容器（头像图 + 直播环 + 关注气泡）
+@interface AWEPlayInteractionUserProfileContainerView : UIView
+@end
+
+// 41.x 红包激励挂件容器（旧名 _TtC21AWEIncentiveSwiftImpl29IncentivePendantContainerView）
+@interface _TtC21AWEIncentiveSwiftImpl20PendantContainerView : UIView
+@end
+
+// 评论区毛玻璃清底用：分区背景 / Tab 内容容器
+@interface AWEBaseListSectionBackgroundView : UIView
+@end
+
+@interface AWEListKitTabContentCollectionView : UICollectionView
+@end
+
+#pragma mark - DYYY 运行时绑定占位类
+// 下面这些不是抖音真实类名，只作为 Logos `%init(Group, 占位名 = 运行时类)` 的符号，
+// 避免把版本敏感的 Swift 类名写死在 %hook 里；类不存在时对应组不会初始化。
+
+@interface DYYY41CommentBaseFooterView : UIView
+@end
+
+@interface DYYY41DetailScrollDelegate : NSObject
+- (CGFloat)fixedCellHeight;
+@end
+
+@interface DYYY41ProfileAdDataLayer : NSObject
+- (CGFloat)originalTableViewHeight;
+- (void)setOriginalTableViewHeight:(CGFloat)height;
+@end
+
+@interface DYYY41ProfileAdVideoDataController : NSObject
+- (CGFloat)originalTableViewHeight;
+- (void)updateOriginalTableViewHeight:(CGFloat)height;
+@end
+
+@interface DYYY41LiveCardLayoutController : NSObject
+- (CGFloat)originalTableViewHeight;
+- (void)setOriginalTableViewHeight:(CGFloat)height;
+@end
+
+@interface DYYY41LiveCardLayoutDataLayer : NSObject
+- (CGFloat)normalHeight;
+- (CGFloat)originalTableViewHeight;
+- (void)setOriginalTableViewHeight:(CGFloat)height;
+@end
+
+@interface DYYY41DetailTableVC : NSObject
+- (CGFloat)fixedCellHeight;
+@end
+
+@interface DYYY41SpeedCore : NSObject
+- (double)longPressFastSpeedValue;
+- (void)handleFastSpeed:(id)gesture;
+@end
+
+@interface DYYY41SpeedFeed : NSObject
+- (double)longPressFastSpeedValue;
+@end
+
+@interface DYYY41SpeedPinch : NSObject
+- (double)longPressFastSpeedValue;
+@end
+
+@interface DYYY41PureModeSpeed : NSObject
+- (double)longPressFastSpeedValue;
+@end
+
+@interface DYYY41CommentHeaderGeneral : UIView
+@end
+
+@interface DYYY41CommentHeaderGoods : UIView
+@end
+
+// 评论长按面板 Element（41.x 逐项 -elementShouldShow 过滤）
+@interface DYYYLPForwardElement : NSObject
+@end
+
+@interface DYYYLPFavoriteElement : NSObject
+@end
+
+@interface DYYYLPCopyElement : NSObject
+@end
+
+@interface DYYYLPSaveImageElement : NSObject
+@end
+
+@interface DYYYLPReportElement : NSObject
+@end
+
+@interface DYYYLPVideoReplyElement : NSObject
+@end
+
+@interface DYYYLPPictureSearchElement : NSObject
+@end
+
+@interface DYYYLPSearchElement : NSObject
+@end
+
+// 评论长按面板顶部"分享给朋友"横排（41.x 由 HorizonSectionController 承担）
+@interface DYYYLPShareHorizonSection : NSObject
+- (CGSize)sizeForItemAtIndex:(NSInteger)index model:(id)model collectionViewSize:(CGSize)size;
+- (void)configCell:(id)cell index:(NSInteger)index model:(id)model;
+@end

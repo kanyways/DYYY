@@ -41,6 +41,27 @@
 #import "DYYYConstants.h"
 #import "DYYYToast.h"
 
+// ==== 构建兼容：iOS 运行时版本判断 builtin ====
+// 部分 Linux 交叉编译工具链（如 L1ghtmann/llvm-project 的 iOSToolchain）没有附带
+// compiler-rt 的 Darwin 运行时库（libclang_rt.ios），clang 为 @available 生成的
+// __isPlatformVersionAtLeast 会变成未定义符号。这里按 compiler-rt 的语义补一份：
+// platform 2 = iOS，比较当前系统版本；其它平台返回 0（本 tweak 不涉及）。
+// 工具链自带 builtins 时链接器不会从归档里再取同名实现，因此不会重复定义。
+int32_t __isPlatformVersionAtLeast(uint32_t platform, uint32_t major, uint32_t minor, uint32_t subminor);
+int32_t __isPlatformVersionAtLeast(uint32_t platform, uint32_t major, uint32_t minor, uint32_t subminor) {
+    if (platform != 2 /* PLATFORM_IOS */) {
+        return 0;
+    }
+    static dispatch_once_t once;
+    static uint32_t currentVersion = 0;
+    dispatch_once(&once, ^{
+        NSOperatingSystemVersion version = [[NSProcessInfo processInfo] operatingSystemVersion];
+        currentVersion = ((uint32_t)version.majorVersion << 16) | ((uint32_t)version.minorVersion << 8) | (uint32_t)version.patchVersion;
+    });
+    uint32_t wanted = (major << 16) | (minor << 8) | subminor;
+    return currentVersion >= wanted ? 1 : 0;
+}
+
 @class YYImageDecoder;
 @class YYImageFrame;
 
